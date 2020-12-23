@@ -2144,7 +2144,7 @@ static int parse_variant_stream_mapstring(AVFormatContext *s)
 {
     HLSContext *hls = s->priv_data;
     VariantStream *vs;
-    int stream_index, i, j, k;
+    int stream_index, i, j;
     enum AVMediaType codec_type;
     int nb_varstreams = 0, nb_streams;
     char *p, *q, *saveptr1, *saveptr2, *varstr, *keyval;
@@ -2188,133 +2188,142 @@ static int parse_variant_stream_mapstring(AVFormatContext *s)
     {
         p = NULL;
 
-        if (nb_varstreams >= hls->var_streams)
+        if (nb_varstreams < hls->nb_varstreams * 2)
+        {
+            vs = &(hls->var_streams[nb_varstreams]);
+            vs->var_stream_idx = nb_varstreams;
+            vs->is_default = 0;
+            nb_varstreams += 2;
+        }
+        else
             return AVERROR(EINVAL);
 
-        for (k = 0; k < 2; k++)
+        q = varstr;
+        while (1)
         {
-            vs = &(hls->var_streams[nb_varstreams * 2 + k]);
-            vs->var_stream_idx = nb_varstreams * 2 + k;
-            vs->is_default = 0;
+            if (!av_strncasecmp(q, "a:", 2) || !av_strncasecmp(q, "v:", 2) ||
+                !av_strncasecmp(q, "s:", 2))
+                vs->nb_streams++;
+            q = strchr(q, ',');
+            if (!q)
+                break;
+            q++;
+        }
+        vs->streams = av_mallocz(sizeof(AVStream *) * vs->nb_streams);
+        if (!vs->streams)
+            return AVERROR(ENOMEM);
 
-            q = varstr;
-            while (1)
+        nb_streams = 0;
+        while (keyval = av_strtok(varstr, ",", &saveptr2))
+        {
+            int64_t num;
+            char *end;
+            varstr = NULL;
+            if (av_strstart(keyval, "language:", &val))
             {
-                if (!av_strncasecmp(q, "a:", 2) || !av_strncasecmp(q, "v:", 2) || !av_strncasecmp(q, "s:", 2))
-                {
-                    vs->nb_streams++;
-                }
-                q = strchr(q, ',');
-                if (!q)
-                    break;
-                q++;
+                vs->language = val;
+                continue;
             }
-            vs->streams = av_mallocz(sizeof(AVStream *) * vs->nb_streams);
-            if (!vs->streams)
-                return AVERROR(ENOMEM);
-
-            nb_streams = 0;
-            while (keyval = av_strtok(varstr, ",", &saveptr2))
+            else if (av_strstart(keyval, "default:", &val))
             {
-                int64_t num;
-                char *end;
-                varstr = NULL;
-                if (av_strstart(keyval, "language:", &val))
-                {
-                    vs->language = val;
-                    continue;
-                }
-                else if (av_strstart(keyval, "default:", &val))
-                {
-                    vs->is_default = (!av_strncasecmp(val, "YES", strlen("YES")) ||
-                                      (!av_strncasecmp(val, "1", strlen("1"))));
-                    hls->has_default_key = 1;
-                    continue;
-                }
-                else if (av_strstart(keyval, "name:", &val))
-                {
-                    vs->varname = val;
-                    continue;
-                }
-                else if (av_strstart(keyval, "agroup:", &val))
-                {
-                    vs->agroup = val;
-                    continue;
-                }
-                else if (av_strstart(keyval, "sgroup:", &val))
-                {
-                    vs->sgroup = val;
-                    continue;
-                }
-                else if (av_strstart(keyval, "ccgroup:", &val))
-                {
-                    vs->ccgroup = val;
-                    continue;
-                }
-                else if (av_strstart(keyval, "v:", &val))
-                {
-                    codec_type = AVMEDIA_TYPE_VIDEO;
-                    hls->has_video_m3u8 = 1;
-                }
-                else if (av_strstart(keyval, "a:", &val))
-                {
-                    codec_type = AVMEDIA_TYPE_AUDIO;
-                }
-                else if (av_strstart(keyval, "s:", &val))
-                {
-                    codec_type = AVMEDIA_TYPE_SUBTITLE;
-                }
-                else
-                {
-                    av_log(s, AV_LOG_ERROR, "Invalid keyval %s\n", keyval);
-                    return AVERROR(EINVAL);
-                }
+                vs->is_default = (!av_strncasecmp(val, "YES", strlen("YES")) ||
+                                  (!av_strncasecmp(val, "1", strlen("1"))));
+                hls->has_default_key = 1;
+                continue;
+            }
+            else if (av_strstart(keyval, "name:", &val))
+            {
+                vs->varname = val;
+                continue;
+            }
+            else if (av_strstart(keyval, "agroup:", &val))
+            {
+                vs->agroup = val;
+                continue;
+            }
+            else if (av_strstart(keyval, "sgroup:", &val))
+            {
+                vs->sgroup = val;
+                continue;
+            }
+            else if (av_strstart(keyval, "ccgroup:", &val))
+            {
+                vs->ccgroup = val;
+                continue;
+            }
+            else if (av_strstart(keyval, "v:", &val))
+            {
+                codec_type = AVMEDIA_TYPE_VIDEO;
+                hls->has_video_m3u8 = 1;
+            }
+            else if (av_strstart(keyval, "a:", &val))
+            {
+                codec_type = AVMEDIA_TYPE_AUDIO;
+            }
+            else if (av_strstart(keyval, "s:", &val))
+            {
+                codec_type = AVMEDIA_TYPE_SUBTITLE;
+            }
+            else
+            {
+                av_log(s, AV_LOG_ERROR, "Invalid keyval %s\n", keyval);
+                return AVERROR(EINVAL);
+            }
 
-                num = strtoll(val, &end, 10);
-                if (!av_isdigit(*val) || *end != '\0')
-                {
-                    av_log(s, AV_LOG_ERROR, "Invalid stream number: '%s'\n", val);
-                    return AVERROR(EINVAL);
-                }
-                stream_index = get_nth_codec_stream_index(s, codec_type, num);
+            num = strtoll(val, &end, 10);
+            if (!av_isdigit(*val) || *end != '\0')
+            {
+                av_log(s, AV_LOG_ERROR, "Invalid stream number: '%s'\n", val);
+                return AVERROR(EINVAL);
+            }
+            stream_index = get_nth_codec_stream_index(s, codec_type, num);
 
-                if (stream_index >= 0 && nb_streams < vs->nb_streams)
+            if (stream_index >= 0 && nb_streams < vs->nb_streams)
+            {
+                for (i = 0; nb_streams > 0 && i < nb_streams; i++)
                 {
-                    for (i = 0; nb_streams > 0 && i < nb_streams; i++)
+                    if (vs->streams[i] == s->streams[stream_index])
                     {
-                        if (vs->streams[i] == s->streams[stream_index])
+                        av_log(s, AV_LOG_ERROR, "Same elementary stream found more than once inside "
+                                                "variant definition #%d\n",
+                               nb_varstreams - 2);
+                        return AVERROR(EINVAL);
+                    }
+                }
+                for (j = 0; nb_varstreams > 2 && j < nb_varstreams - 2; j += 2)
+                {
+                    for (i = 0; i < hls->var_streams[j].nb_streams; i++)
+                    {
+                        if (hls->var_streams[j].streams[i] == s->streams[stream_index])
                         {
-                            av_log(s, AV_LOG_ERROR, "Same elementary stream found more than once inside "
-                                                    "variant definition #%d\n",
-                                   nb_varstreams);
+                            av_log(s, AV_LOG_ERROR, "Same elementary stream found more than once "
+                                                    "in two different variant definitions #%d and #%d\n",
+                                   j, nb_varstreams - 2);
                             return AVERROR(EINVAL);
                         }
                     }
-                    for (j = 0; nb_varstreams > 0 && j < nb_varstreams; j++)
-                    {
-                        for (i = 0; i < hls->var_streams[j].nb_streams; i++)
-                        {
-                            if (hls->var_streams[j].streams[i] == s->streams[stream_index])
-                            {
-                                av_log(s, AV_LOG_ERROR, "Same elementary stream found more than once "
-                                                        "in two different variant definitions #%d and #%d\n",
-                                       j, nb_varstreams);
-                                return AVERROR(EINVAL);
-                            }
-                        }
-                    }
-                    vs->streams[nb_streams] = s->streams[stream_index];
-                    nb_streams++;
                 }
-                else
-                {
-                    av_log(s, AV_LOG_ERROR, "Unable to map stream at %s\n", keyval);
-                    return AVERROR(EINVAL);
-                }
+                vs->streams[nb_streams++] = s->streams[stream_index];
+            }
+            else
+            {
+                av_log(s, AV_LOG_ERROR, "Unable to map stream at %s\n", keyval);
+                return AVERROR(EINVAL);
             }
         }
-        nb_varstreams++;
     }
+
+    for (i = 1; i < hls->nb_varstreams * 2; i += 2)
+    {
+        hls->var_streams[i] = hls->var_streams[i - 1];
+        hls->var_streams[i].var_stream_idx = j;
+        hls->var_streams[i].streams = av_mallocz(sizeof(AVStream *) * hls->var_streams[i].nb_streams);
+        if (!hls->var_streams[i].streams)
+            return AVERROR(ENOMEM);
+        for (j = 0; j < hls->var_streams[i].nb_streams; j++)
+            hls->var_streams[i].streams[j] = hls->var_streams[i - 1].streams[j];
+    }
+
     av_log(s, AV_LOG_DEBUG, "Number of variant streams %d\n",
            hls->nb_varstreams);
 
@@ -2782,8 +2791,6 @@ static int hls_write_packet(AVFormatContext *s, AVPacket *pkt)
     AVStream *st = s->streams[pkt->stream_index];
     int64_t end_pts = 0;
     int64_t llhls_partial_end_pts = 0;
-    int llhls_partial_per_sequence = 0;
-    int index_partial_in_sequence = 0;
     int is_ref_pkt = 1;
     int ret = 0, can_split = 1, i, j;
     int stream_index = 0;
@@ -2822,10 +2829,8 @@ static int hls_write_packet(AVFormatContext *s, AVPacket *pkt)
         return AVERROR(ENOMEM);
     }
 
-    llhls_partial_per_sequence = ceil(hls->recording_time / LLHLS_PARTIAL_PTS);
     end_pts = hls->recording_time * segment_vs->number;
-    llhls_partial_end_pts = LLHLS_PARTIAL_PTS * partial_vs->number;
-    index_partial_in_sequence = (partial_vs->number - 1) % llhls_partial_per_sequence;
+    llhls_partial_end_pts = LLHLS_PARTIAL_PTS * (partial_vs->number + 1);
 
     if (segment_vs->sequence - segment_vs->nb_entries > hls->start_sequence && hls->init_time > 0)
     {
@@ -2841,11 +2846,15 @@ static int hls_write_packet(AVFormatContext *s, AVPacket *pkt)
         segment_vs->start_pts = pkt->pts;
         if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
             segment_vs->start_pts_from_audio = 1;
+
+        partial_vs->start_pts = segment_vs->start_pts;
     }
     if (segment_vs->start_pts_from_audio && st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && segment_vs->start_pts > pkt->pts)
     {
         segment_vs->start_pts = pkt->pts;
         segment_vs->start_pts_from_audio = 0;
+
+        partial_vs->start_pts = segment_vs->start_pts;
     }
 
     if (segment_vs->has_video)
@@ -2891,13 +2900,14 @@ static int hls_write_packet(AVFormatContext *s, AVPacket *pkt)
 
     // condition
     int can_write_segment = segment_vs->packets_written && can_split && av_compare_ts(pkt->pts - segment_vs->start_pts, st->time_base, end_pts, AV_TIME_BASE_Q) >= 0;
-    int can_write_partial = can_write_segment || av_compare_ts(pkt->pts - segment_vs->start_pts, st->time_base, llhls_partial_end_pts, AV_TIME_BASE_Q) >= 0;
+    int can_write_partial = can_write_segment || (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
+                                                  av_compare_ts(pkt->pts - partial_vs->start_pts, st->time_base, llhls_partial_end_pts, AV_TIME_BASE_Q) >= 0);
 
     if (can_write_partial)
     {
         char *last_dot = strrchr(filename, '.');
         *last_dot = '\0';
-        char *partial_filename = av_asprintf("%s.%d.%s", filename, index_partial_in_sequence, (last_dot+1));
+        char *partial_filename = av_asprintf("%s.%d.%s", filename, partial_vs->number, (last_dot + 1));
         *last_dot = '.';
         ret = hls_write_partial_or_sequence(s, hls, pkt, st, partial_vs, partial_oc, partial_filename);
         av_freep(&partial_filename);
@@ -2916,6 +2926,10 @@ static int hls_write_packet(AVFormatContext *s, AVPacket *pkt)
             av_freep(&filename);
             return ret;
         }
+
+        // reset start_pos for partial
+        partial_vs->start_pts = pkt->pts;
+        partial_vs->number = 0;
     }
     av_freep(&filename);
 
@@ -3417,7 +3431,8 @@ static int hls_init(AVFormatContext *s)
 
         if ((ret = hls_start(s, vs)) < 0)
             return ret;
-        vs->number++;
+        if (i % 2 == 0)
+            vs->number++;
     }
 
     return ret;
