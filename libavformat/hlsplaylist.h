@@ -29,12 +29,19 @@
 #include "avformat.h"
 #include "avio.h"
 
-typedef enum {
+typedef enum
+{
     PLAYLIST_TYPE_NONE,
     PLAYLIST_TYPE_EVENT,
     PLAYLIST_TYPE_VOD,
     PLAYLIST_TYPE_NB,
 } PlaylistType;
+
+typedef enum
+{
+    PRELOAD_HINT_TYPE_PART,
+    PRELOAD_HINT_TYPE_MAP
+} PreloadHintType;
 
 void ff_hls_write_playlist_version(AVIOContext *out, int version);
 void ff_hls_write_audio_rendition(AVIOContext *out, const char *agroup,
@@ -60,6 +67,11 @@ int ff_hls_write_file_entry(AVIOContext *out, int insert_discont,
                             const char *filename, double *prog_date_time,
                             int64_t video_keyframe_size, int64_t video_keyframe_pos,
                             int iframe_mode);
-void ff_hls_write_end_list (AVIOContext *out);
+void ff_hls_write_ext_x_part(AVIOContext *out, double duration, int iframe_mode, const char *filename);
+void ff_hls_write_ext_x_server_control(AVIOContext *out, int can_block_reload,
+                                       double part_hold_back, double can_skip_until);
+void ff_hls_write_ext_x_preload_hint(AVIOContext *out, PreloadHintType type, const char* uri);
+void ff_hls_write_ext_x_program_date_time(AVIOContext *out, double *prog_date_time);
+void ff_hls_write_end_list(AVIOContext *out);
 
 #endif /* AVFORMAT_HLSPLAYLIST_H_ */
