@@ -25,6 +25,7 @@
 #include <unistd.h>
 #endif
 
+#include <libxml/parser.h>
 #include "libavutil/avassert.h"
 #include "libavutil/avutil.h"
 #include "libavutil/avstring.h"
@@ -66,8 +67,15 @@ enum {
     FRAG_TYPE_NB
 };
 
+typedef enum DashFlags {
+    DASH_APPEND_LIST = (1 << 0),
+} DashFlags;
+
 #define MPD_PROFILE_DASH 1
 #define MPD_PROFILE_DVB  2
+
+#define MAX_MANIFEST_SIZE 50 * 1024
+#define DEFAULT_MANIFEST_SIZE 8 * 1024
 
 typedef struct Segment {
     char file[1024];
@@ -139,6 +147,26 @@ typedef struct OutputStream {
     int coding_dependency;
 } OutputStream;
 
+typedef struct Period
+{
+    char *data;
+    int id;
+    int64_t start; /* in AV_TIME_BASE */
+    int64_t duration;  /* in AV_TIME_BASE */
+
+    /* for video */
+    int v_representation_id;
+    int v_start_number;
+    int v_nb_segments;
+
+    /* for audio */
+    int a_representation_id;
+    int a_start_number;
+    int a_nb_segments;
+
+} Period;
+
+
 typedef struct DASHContext {
     const AVClass *class;  /* Class for private options. */
     char *adaptation_sets;
@@ -158,7 +186,7 @@ typedef struct DASHContext {
     OutputStream *streams;
     int has_video;
     int64_t last_duration;
-    int64_t total_duration;
+    int64_t total_curr_duration;
     char availability_start_time[100];
     time_t start_time_s;
     int64_t presentation_time_offset;
@@ -196,6 +224,12 @@ typedef struct DASHContext {
     int target_latency_refid;
     AVRational min_playback_rate;
     AVRational max_playback_rate;
+
+    /* attributes for append period */
+    int flags;
+    Period *old_periods;
+    int nb_old_periods;
+    int64_t old_periods_duration;
 } DASHContext;
 
 static struct codec_string {
@@ -219,6 +253,18 @@ static struct format_string {
     { SEGMENT_TYPE_WEBM, "webm" },
     { 0, NULL }
 };
+
+static int get_max_last_period_id(DASHContext *c)
+{
+    int max_id = -1;
+    int i;
+    for (i = 0; i < c->nb_old_periods; i++)
+    {
+        if (c->old_periods[i].id > max_id)
+            max_id = c->old_periods[i].id;
+    }
+    return max_id;
+}
 
 static int dashenc_io_open(AVFormatContext *s, AVIOContext **pb, char *filename,
                            AVDictionary **options) {
@@ -283,6 +329,64 @@ static int handle_io_open_error(AVFormatContext *s, int err, char *url) {
     av_log(s, c->ignore_io_errors ? AV_LOG_WARNING : AV_LOG_ERROR,
            "Unable to open %s for writing: %s\n", url, errbuf);
     return c->ignore_io_errors ? 0 : err;
+}
+
+static void write_old_periods(AVIOContext *out, DASHContext *c)
+{
+    int i;
+    for (i = 0; i < c->nb_old_periods; i++)
+    {
+        avio_printf(out, "%s\n", c->old_periods[i].data);
+    }
+}
+
+static int64_t get_duration_in_av_time_base(AVFormatContext *s, const char *duration)
+{
+    /* ISO-8601 duration parser */
+    float time = 0;
+    float days = 0;
+    float hours = 0;
+    float mins = 0;
+    float secs = 0;
+    int size = 0;
+    float value = 0;
+    char type = '\0';
+    const char *ptr = duration;
+
+    while (*ptr) {
+        if (*ptr == 'P' || *ptr == 'T')
+        {
+            ptr++;
+            continue;
+        }
+
+        if (sscanf(ptr, "%f%c%n", &value, &type, &size) != 2)
+        {
+            av_log(s, AV_LOG_WARNING, "get_duration_insec get a wrong time format\n");
+            return 0; /* parser error */
+        }
+        switch (type)
+        {
+            case 'D':
+                days = value;
+                break;
+            case 'H':
+                hours = value;
+                break;
+            case 'M':
+                mins = value;
+                break;
+            case 'S':
+                secs = value;
+                break;
+            default:
+                // handle invalid type
+                break;
+        }
+        ptr += size;
+    }
+    time = ((days * 24 + hours) * 60 + mins) * 60 + secs;
+    return  (int64_t)(time * AV_TIME_BASE);
 }
 
 static inline SegmentType select_segment_type(SegmentType segment_type, enum AVCodecID codec_id)
@@ -645,6 +749,17 @@ static void dash_free(AVFormatContext *s)
     }
     av_freep(&c->streams);
 
+    /* free old period */
+    if (c->old_periods)
+    {
+        for (i = 0; i < c->nb_old_periods; i++)
+        {
+            av_freep(&c->old_periods[i].data);
+        }
+        av_freep(&c->old_periods);
+        c->nb_old_periods = 0;
+    }
+
     ff_format_io_close(s, &c->mpd_out);
     ff_format_io_close(s, &c->m3u8_out);
 }
@@ -669,6 +784,7 @@ static void output_segment_list(OutputStream *os, AVIOContext *out, AVFormatCont
             avio_printf(out, "availabilityTimeComplete=\"false\" ");
 
         avio_printf(out, "initialization=\"%s\" media=\"%s\" startNumber=\"%d\"", os->init_seg_name, os->media_seg_name, c->use_timeline ? start_number : 1);
+        // c->presentation_time_offset = c->old_periods_duration / AV_TIME_BASE;
         if (c->presentation_time_offset)
             avio_printf(out, " presentationTimeOffset=\"%"PRId64"\"", c->presentation_time_offset);
         avio_printf(out, ">\n");
@@ -825,6 +941,8 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
         avio_printf(out, "\t\t\t<Resync dT=\"%"PRId64"\" type=\"0\"/>\n", as->max_frag_duration);
     if (as->trick_idx >= 0)
         avio_printf(out, "\t\t\t<EssentialProperty id=\"%d\" schemeIdUri=\"http://dashif.org/guidelines/trickmode\" value=\"%d\"/>\n", as->id, as->trick_idx);
+    if (get_max_last_period_id(c) >= 0)
+        avio_printf(out, "\t\t\t<SupplementalProperty schemeIdUri=\"urn:mpeg:dash:period_continuity:2014\" value=\"%d\" />\n", get_max_last_period_id(c));
     role = av_dict_get(as->metadata, "role", NULL, 0);
     if (role)
         avio_printf(out, "\t\t\t<Role schemeIdUri=\"urn:mpeg:dash:role:2011\" value=\"%s\"/>\n", role->value);
@@ -881,6 +999,265 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
     avio_printf(out, "\t\t</AdaptationSet>\n");
 
     return 0;
+}
+
+static int increase_old_periods(AVFormatContext *s, Period **p)
+{
+    DASHContext *c = s->priv_data;
+    void *mem;
+
+    mem = av_realloc(c->old_periods, sizeof(*c->old_periods) * (c->nb_old_periods + 1));
+    if(!mem)
+        return AVERROR(ENOMEM);
+    c->old_periods = mem;
+    *p = &c->old_periods[c->nb_old_periods];
+    c->nb_old_periods++;
+    memset(*p, 0, sizeof(**p));
+
+    return 0;
+}
+
+static int parse_manifest(AVFormatContext *s)
+{
+    DASHContext *dash = s->priv_data;
+    AVIOContext *io_ctx = NULL;
+    AVBPrint buff;
+    Period *period = NULL;
+    xmlBufferPtr xml_buff;
+    int size = 0;
+    xmlDoc *doc = NULL;
+    xmlNodePtr root_node = NULL;
+    xmlNodePtr lv1_node = NULL;
+    xmlNodePtr lv2_node = NULL;
+    xmlNodePtr lv3_node = NULL;
+    xmlNodePtr lv4_node = NULL;
+    xmlNodePtr lv5_node = NULL;
+    xmlNodePtr lv6_node = NULL;
+    xmlAttrPtr attr = NULL;
+    char *val = NULL;
+    int ret = 0;
+    int64_t filesize = 0;
+    int tmp_int;
+    int64_t tmp_int64;
+    int tmp_represenstation_id = 0;
+    int tmp_start_number = 0;
+    int tmp_nb_segments = 0;
+
+    ret = avio_open(&io_ctx, s->url, AVIO_FLAG_READ);
+    if (ret < 0)
+        return ret;
+    filesize = avio_size(io_ctx);
+    if (filesize > MAX_MANIFEST_SIZE)
+    {
+        av_log(s, AV_LOG_ERROR, "Manifest too large: %"PRId64"\n", filesize);
+        return AVERROR_INVALIDDATA;
+    }
+    av_bprint_init(&buff, (filesize > 0) ? filesize + 1 : DEFAULT_MANIFEST_SIZE, AV_BPRINT_SIZE_UNLIMITED);
+    if ((ret = avio_read_to_bprint(io_ctx, &buff, MAX_MANIFEST_SIZE)) < 0 || !avio_feof(io_ctx) || (filesize = buff.len) == 0)
+    {
+        av_log(s, AV_LOG_ERROR, "Unable to read to manifest '%s'\n", s->url);
+        if (ret == 0)
+            ret = AVERROR_INVALIDDATA;
+    }
+    else
+    {
+        LIBXML_TEST_VERSION
+
+        xml_buff = xmlBufferCreate();
+        doc = xmlReadMemory(buff.str, filesize, s->url, NULL, 0);
+        root_node = xmlDocGetRootElement(doc);
+        if (root_node->type != XML_ELEMENT_NODE || av_strcasecmp(root_node->name, "MPD"))
+        {
+            ret = AVERROR_INVALIDDATA;
+            av_log(s, AV_LOG_ERROR, "Unable to parse '%s' - wrong root node name[%s] type[%d]\n", s->url, root_node->name, (int)root_node->type);
+            goto cleanup;
+        }
+
+        /* MPD tag properties */
+        val = xmlGetProp(root_node, "availabilityStartTime");
+        if (val)
+        {
+            memcpy(dash->availability_start_time, val, sizeof(dash->availability_start_time));
+            xmlFree(val);
+        }
+        val = xmlGetProp(root_node, "mediaPresentationDuration");
+        if (val)
+        {
+            dash->old_periods_duration = get_duration_in_av_time_base(s, val);
+            xmlFree(val);
+        }
+        val = xmlGetProp(root_node, "maxSegmentDuration");
+        if (val)
+        {
+            tmp_int64 = get_duration_in_av_time_base(s, val);
+            dash->max_segment_duration = FFMAX(tmp_int64, dash->max_segment_duration);
+            xmlFree(val);
+        }
+
+        /* MPD tag sub tags */
+        lv1_node = xmlFirstElementChild(root_node);
+        while (lv1_node)
+        {
+            if (!av_strcasecmp(lv1_node->name, "Period"))
+            {
+                ret = increase_old_periods(s, &period);
+                if (ret < 0)
+                    goto cleanup;
+                size = xmlNodeDump(xml_buff, doc, lv1_node, 0, 1);
+                if (size < 0)
+                {
+                    ret = size;
+                    goto cleanup;
+                }
+                period->data = av_strdup(xml_buff->content);
+                xmlBufferEmpty(xml_buff);
+
+                attr = lv1_node->properties;
+                while (attr)
+                {
+                    val = xmlGetProp(lv1_node, attr->name);
+                    if (!av_strcasecmp(attr->name, "id"))
+                    {
+                        period->id = atoi(val);
+                    } else if (!av_strcasecmp(attr->name, "start"))
+                    {
+                        period->start = get_duration_in_av_time_base(s, val);
+                    } else if (!av_strcasecmp(attr->name, "d"))
+                    {
+                        period->duration = atol(val);
+                    }
+                    xmlFree(val);
+                    attr = attr->next;
+                }
+
+                lv2_node = xmlFirstElementChild(lv1_node);
+                while (lv2_node)
+                {
+                    if (!av_strcasecmp(lv2_node->name, "AdaptationSet"))
+                    {
+                        tmp_represenstation_id = 0;
+                        tmp_start_number = 0;
+                        tmp_nb_segments = 0;
+                        lv3_node = xmlFirstElementChild(lv2_node);
+                        while (lv3_node)
+                        {
+                            if (!av_strcasecmp(lv3_node->name, "Representation"))
+                            {
+                                val = xmlGetProp(lv3_node, "id");
+                                tmp_represenstation_id = atoi(val);
+                                xmlFree(val);
+                                lv4_node = xmlFirstElementChild(lv3_node);
+                                while (lv4_node)
+                                {
+                                    if (!av_strcasecmp(lv4_node->name, "SegmentTemplate"))
+                                    {
+                                        lv5_node = xmlFirstElementChild(lv4_node);
+                                        lv6_node = xmlFirstElementChild(lv5_node);
+                                        while (lv6_node)
+                                        {
+                                            tmp_nb_segments++;
+                                            val = xmlGetProp(lv6_node, "r");
+                                            if (val)
+                                                tmp_nb_segments += atoi(val);
+                                            xmlFree(val);
+                                            lv6_node = xmlNextElementSibling(lv6_node);
+                                        }
+                                    } else if (!av_strcasecmp(lv4_node->name, "SegmentList"))
+                                    {
+                                        lv5_node = xmlFirstElementChild(lv4_node);
+                                        while (lv5_node)
+                                        {
+                                            if (!av_strcasecmp(lv5_node->name, "SegmentURL"))
+                                                tmp_nb_segments++;
+                                            lv5_node = xmlNextElementSibling(lv5_node);
+                                        }
+                                    } else
+                                    {
+                                        lv4_node = xmlNextElementSibling(lv4_node);
+                                        continue;
+                                    }
+                                    val = xmlGetProp(lv4_node, "startNumber");
+                                    tmp_start_number = atoi(val);
+                                    xmlFree(val);
+                                    lv4_node = xmlNextElementSibling(lv4_node);
+                                }
+                            }
+                            lv3_node = xmlNextElementSibling(lv3_node);
+                        }
+
+                        val = xmlGetProp(lv2_node, "contentType");
+                        if (!av_strcasecmp(val, "video"))
+                        {
+                            period->v_representation_id = tmp_represenstation_id;
+                            period->v_start_number = tmp_start_number;
+                            period->v_nb_segments = tmp_nb_segments;
+                        } else if (!av_strcasecmp(val, "audio"))
+                        {
+                            period->a_representation_id = tmp_represenstation_id;
+                            period->a_start_number = tmp_start_number;
+                            period->a_nb_segments = tmp_nb_segments;                            
+                        }
+                        xmlFree(val);
+                    }
+                    lv2_node = xmlNextElementSibling(lv2_node);
+                }
+            }
+            lv1_node = xmlNextElementSibling(lv1_node);
+        }
+cleanup:
+        xmlBufferFree(xml_buff);
+        xmlFreeDoc(doc);
+        xmlCleanupParser();
+    }
+
+    av_bprint_finalize(&buff, NULL);
+    avio_close(io_ctx);
+    
+    return ret;
+}
+
+static int replace_filename(OutputStream *os, DASHContext *c)
+{
+    char *tmp;
+    char str_max_id[8];
+    int i;
+    int ret = 0;
+
+    sprintf(str_max_id, "%d", get_max_last_period_id(c) + 1);
+    if (os->init_seg_name)
+    {
+        tmp = os->init_seg_name;
+        os->init_seg_name = av_strireplace(tmp, "$PeriodID$", str_max_id);
+        av_freep(&tmp);
+        if (!os->init_seg_name)
+            return AVERROR(ENOMEM);
+    }
+    if (os->media_seg_name)
+    {
+        tmp = os->media_seg_name;
+        os->media_seg_name = av_strireplace(tmp, "$PeriodID$", str_max_id);
+        av_freep(&tmp);
+        if (!os->media_seg_name)
+            return AVERROR(ENOMEM);
+    }
+    return ret;
+}
+
+static void sync_for_append_list(AVFormatContext *s)
+{
+    DASHContext *c = s->priv_data;
+    Period *p = NULL;
+    int i = 0;
+    int64_t tmp_int64 = 0;
+    for (i = 0; i < c->nb_old_periods; i++)
+    {
+        p = &c->old_periods[i];
+        tmp_int64 = tmp_int64 + p->duration;
+    }
+    if (!c->old_periods_duration)
+    {
+        c->old_periods_duration = tmp_int64;
+    }
 }
 
 static int add_adaptation_set(AVFormatContext *s, AdaptationSet **as, enum AVMediaType type)
@@ -1139,7 +1516,7 @@ static int write_manifest(AVFormatContext *s, int final)
     DASHContext *c = s->priv_data;
     AVIOContext *out;
     char temp_filename[1024];
-    int ret, i;
+    int ret, i, period_id;
     const char *proto = avio_find_protocol_name(s->url);
     int use_rename = proto && !strcmp(proto, "file");
     static unsigned int warned_non_file = 0;
@@ -1171,7 +1548,7 @@ static int write_manifest(AVFormatContext *s, int final)
                 final ? "static" : "dynamic");
     if (final) {
         avio_printf(out, "\tmediaPresentationDuration=\"");
-        write_time(out, c->total_duration);
+        write_time(out, c->total_curr_duration + c->old_periods_duration);
         avio_printf(out, "\"\n");
     } else {
         int64_t update_period = c->last_duration / AV_TIME_BASE;
@@ -1219,15 +1596,25 @@ static int write_manifest(AVFormatContext *s, int final)
                     av_q2d(c->min_playback_rate), av_q2d(c->max_playback_rate));
     avio_printf(out, "\t</ServiceDescription>\n");
 
+    /* write old period */
+    write_old_periods(out, c);
+    period_id = get_max_last_period_id(c) + 1;
+
     if (c->window_size && s->nb_streams > 0 && c->streams[0].nb_segments > 0 && !c->use_template) {
         OutputStream *os = &c->streams[0];
         int start_index = FFMAX(os->nb_segments - c->window_size, 0);
         int64_t start_time = av_rescale_q(os->segments[start_index]->time, s->streams[0]->time_base, AV_TIME_BASE_Q);
-        avio_printf(out, "\t<Period id=\"0\" start=\"");
+        avio_printf(out, "\t<Period id=\"%d\" start=\"", period_id);
         write_time(out, start_time);
+        /* new properties for get duration purpose */
+        avio_printf(out, "\" d=\"%ld", c->total_curr_duration);
         avio_printf(out, "\">\n");
     } else {
-        avio_printf(out, "\t<Period id=\"0\" start=\"PT0.0S\">\n");
+        avio_printf(out, "\t<Period id=\"%d\" start=\"", period_id);
+        write_time(out, c->old_periods_duration);
+        /* new properties for get duration purpose */
+        avio_printf(out, "\" d=\"%ld", c->total_curr_duration);
+        avio_printf(out, "\">\n");
     }
 
     for (i = 0; i < c->nb_as; i++) {
@@ -1348,6 +1735,12 @@ static int dash_init(AVFormatContext *s)
     int ret = 0, i;
     char *ptr;
     char basename[1024];
+
+    if (c->flags & DASH_APPEND_LIST)
+    {
+        ret = parse_manifest(s);
+        sync_for_append_list(s);
+    }
 
     c->nr_of_streams_to_flush = 0;
     if (c->single_file_name)
@@ -1495,6 +1888,9 @@ static int dash_init(AVFormatContext *s)
             if (!os->single_file_name)
                 return AVERROR(ENOMEM);
         }
+
+        if (ret = replace_filename(os, c) < 0)
+            return ret;
 
         if (os->segment_type == SEGMENT_TYPE_WEBM) {
             if ((!c->single_file && check_file_extension(os->init_seg_name, os->format_name) != 0) ||
@@ -2009,7 +2405,8 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
 
             c->nr_of_streams_flushed = 0;
         }
-        ret = write_manifest(s, final);
+        // ret = write_manifest(s, final);
+        ret = write_manifest(s, 0);
     }
     return ret;
 }
@@ -2140,7 +2537,7 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
             c->last_duration = av_rescale_q(pkt->pts - os->start_pts,
                     st->time_base,
                     AV_TIME_BASE_Q);
-            c->total_duration = av_rescale_q(pkt->pts - os->first_pts,
+            c->total_curr_duration = av_rescale_q(pkt->pts - os->first_pts,
                     st->time_base,
                     AV_TIME_BASE_Q);
 
@@ -2271,7 +2668,7 @@ static int dash_write_trailer(AVFormatContext *s)
             c->last_duration = av_rescale_q(os->max_pts - os->start_pts,
                                             s->streams[0]->time_base,
                                             AV_TIME_BASE_Q);
-        c->total_duration = av_rescale_q(os->max_pts - os->first_pts,
+        c->total_curr_duration = av_rescale_q(os->max_pts - os->first_pts,
                                          s->streams[0]->time_base,
                                          AV_TIME_BASE_Q);
     }
@@ -2342,8 +2739,8 @@ static const AVOption options[] = {
     { "use_timeline", "Use SegmentTimeline in SegmentTemplate", OFFSET(use_timeline), AV_OPT_TYPE_BOOL, { .i64 = 1 }, 0, 1, E },
     { "single_file", "Store all segments in one file, accessed using byte ranges", OFFSET(single_file), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, E },
     { "single_file_name", "DASH-templated name to be used for baseURL. Implies storing all segments in one file, accessed using byte ranges", OFFSET(single_file_name), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, E },
-    { "init_seg_name", "DASH-templated name to used for the initialization segment", OFFSET(init_seg_name), AV_OPT_TYPE_STRING, {.str = "init-stream$RepresentationID$.$ext$"}, 0, 0, E },
-    { "media_seg_name", "DASH-templated name to used for the media segments", OFFSET(media_seg_name), AV_OPT_TYPE_STRING, {.str = "chunk-stream$RepresentationID$-$Number%05d$.$ext$"}, 0, 0, E },
+    { "init_seg_name", "DASH-templated name to used for the initialization segment", OFFSET(init_seg_name), AV_OPT_TYPE_STRING, {.str = "init-period$PeriodID$-stream$RepresentationID$.$ext$"}, 0, 0, E },
+    { "media_seg_name", "DASH-templated name to used for the media segments", OFFSET(media_seg_name), AV_OPT_TYPE_STRING, {.str = "period$PeriodID$-stream$RepresentationID$-$Number%05d$.$ext$"}, 0, 0, E },
     { "utc_timing_url", "URL of the page that will return the UTC timestamp in ISO format", OFFSET(utc_timing_url), AV_OPT_TYPE_STRING, { 0 }, 0, 0, E },
     { "method", "set the HTTP method", OFFSET(method), AV_OPT_TYPE_STRING, {.str = NULL}, 0, 0, E },
     { "http_user_agent", "override User-Agent field in HTTP header", OFFSET(user_agent), AV_OPT_TYPE_STRING, {.str = NULL}, 0, 0, E},
@@ -2370,6 +2767,8 @@ static const AVOption options[] = {
     { "target_latency", "Set desired target latency for Low-latency dash", OFFSET(target_latency), AV_OPT_TYPE_DURATION, { .i64 = 0 }, 0, INT_MAX, E },
     { "min_playback_rate", "Set desired minimum playback rate", OFFSET(min_playback_rate), AV_OPT_TYPE_RATIONAL, { .dbl = 1.0 }, 0.5, 1.5, E },
     { "max_playback_rate", "Set desired maximum playback rate", OFFSET(max_playback_rate), AV_OPT_TYPE_RATIONAL, { .dbl = 1.0 }, 0.5, 1.5, E },
+    { "dash_flags", "Set flags affecting DASH playlist and media file generation", OFFSET(flags), AV_OPT_TYPE_FLAGS, {.i64 = 0 }, 0, UINT_MAX, E, "flags"},
+    { "append_list", "Append the new segments into old hls segment list", 0, AV_OPT_TYPE_CONST, {.i64 = DASH_APPEND_LIST }, 0, UINT_MAX,   E, "flags"},
     { NULL },
 };
 
