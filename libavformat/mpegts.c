@@ -1286,7 +1286,7 @@ skip:
                     p += sl_header_bytes;
                     buf_size -= sl_header_bytes;
                 }
-                if (pes->stream_type == 0x15 && buf_size >= 5) {
+                if (pes->stream_type == 0x15 && buf_size >= 5 && !(p[0] == 'I' && p[1] == 'D' && p[2] == '3')) {
                     /* skip metadata access unit header */
                     pes->pes_header_size += 5;
                     p += 5;

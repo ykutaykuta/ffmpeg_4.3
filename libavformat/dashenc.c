@@ -35,6 +35,7 @@
 #include "libavutil/rational.h"
 #include "libavutil/time.h"
 #include "libavutil/time_internal.h"
+#include "id3v2.h"
 
 #include "av1.h"
 #include "avc.h"
@@ -196,6 +197,10 @@ typedef struct DASHContext {
     int target_latency_refid;
     AVRational min_playback_rate;
     AVRational max_playback_rate;
+
+    int id3_stream_idx;
+    AVPacketList *id3_pkts;
+    int nb_id3_pkt;
 } DASHContext;
 
 static struct codec_string {
@@ -258,6 +263,53 @@ static void dashenc_io_close(AVFormatContext *s, AVIOContext **pb, char *filenam
     }
 }
 
+static int parse_id3(AVFormatContext *s, unsigned char **out)
+{
+    DASHContext *c = s->priv_data;
+    AVDictionary *metadata = NULL;
+    ID3v2ExtraMeta *extra_meta = NULL;
+    AVPacketList *pktl = c->id3_pkts;
+    AVIOContext ioctx;
+    int i, size, ret = 0;
+    AVDictionaryEntry *t = NULL;
+    AVBPrint bprint;
+    int cnt = 0;
+
+	ffio_init_context(&ioctx, pktl->pkt.data, pktl->pkt.size, 0, NULL, NULL, NULL, NULL);
+
+    ff_id3v2_read_dict(&ioctx, &metadata, ID3v2_DEFAULT_MAGIC, &extra_meta);
+    if (metadata)
+    {
+        if (!av_dict_count(metadata))
+        {
+            *out = av_strdup("");
+            ret = *out ? 0 : AVERROR(ENOMEM);
+        }
+
+        av_bprint_init(&bprint, 64, AV_BPRINT_SIZE_UNLIMITED);
+        av_bprint_append_data(&bprint, "{", 1);
+        while ((t = av_dict_get(metadata, "", t, AV_DICT_IGNORE_SUFFIX)))
+        {
+            if (cnt++)
+                av_bprint_append_data(&bprint, ",", 1);
+            av_bprint_escape(&bprint, t->key, NULL, AV_ESCAPE_MODE_BACKSLASH, 0);
+            av_bprint_append_data(&bprint, ":", 1);
+            av_bprint_escape(&bprint, t->value, NULL, AV_ESCAPE_MODE_BACKSLASH, 0);
+        }
+        av_bprint_append_data(&bprint, "}", 1);
+        ret = av_bprint_finalize(&bprint, out);
+        if (ret < 0)
+            return ret;
+        ret = strlen(*out);
+    }
+
+free:
+    c->id3_pkts = pktl->next;
+    av_freep(&pktl);
+    c->nb_id3_pkt--;
+    return ret;
+}
+
 static const char *get_format_str(SegmentType segment_type) {
     int i;
     for (i = 0; i < SEGMENT_TYPE_NB; i++)
@@ -304,6 +356,8 @@ static int init_segment_types(AVFormatContext *s)
     DASHContext *c = s->priv_data;
     int has_mp4_streams = 0;
     for (int i = 0; i < s->nb_streams; ++i) {
+        if (i == c->id3_stream_idx)
+            continue;
         OutputStream *os = &c->streams[i];
         SegmentType segment_type = select_segment_type(
             c->segment_type_option, s->streams[i]->codecpar->codec_id);
@@ -625,6 +679,8 @@ static void dash_free(AVFormatContext *s)
     if (!c->streams)
         return;
     for (i = 0; i < s->nb_streams; i++) {
+        if (i == c->id3_stream_idx)
+            continue;
         OutputStream *os = &c->streams[i];
         if (os->ctx && os->ctx->pb) {
             if (!c->single_file)
@@ -831,6 +887,8 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
     if (as->descriptor)
         avio_printf(out, "\t\t\t%s\n", as->descriptor);
     for (i = 0; i < s->nb_streams; i++) {
+        if (i == c->id3_stream_idx)
+            continue;
         AVStream *st = s->streams[i];
         OutputStream *os = &c->streams[i];
         char bandwidth_str[64] = {'\0'};
@@ -861,6 +919,10 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
                 avio_printf(out, " codingDependency=\"false\"");
             avio_printf(out, ">\n");
         } else {
+            if (c->id3_stream_idx > 0)
+            {
+                avio_printf(out, "\t\t\t<InbandEventStream schemeIdUri=\"urn:scte:scte35:2013:xml\" value=\"999\"/>\n");
+            }
             avio_printf(out, "\t\t\t<Representation id=\"%d\" mimeType=\"audio/%s\" codecs=\"%s\"%s audioSamplingRate=\"%d\">\n",
                 i, os->format_name, os->codec_str, bandwidth_str, s->streams[i]->codecpar->sample_rate);
             avio_printf(out, "\t\t\t\t<AudioChannelConfiguration schemeIdUri=\"urn:mpeg:dash:23003:3:audio_channel_configuration:2011\" value=\"%d\" />\n",
@@ -941,6 +1003,8 @@ static int parse_adaptation_sets(AVFormatContext *s)
     // default: one AdaptationSet for each stream
     if (!p) {
         for (i = 0; i < s->nb_streams; i++) {
+            if (i == c->id3_stream_idx)
+                continue;
             if ((ret = add_adaptation_set(s, &as, s->streams[i]->codecpar->codec_type)) < 0)
                 return ret;
             as->id = i;
@@ -1073,6 +1137,8 @@ static int parse_adaptation_sets(AVFormatContext *s)
                 av_log(s, AV_LOG_DEBUG, "Map all streams of type %s\n", idx_str);
 
                 for (i = 0; i < s->nb_streams; i++) {
+                    if (i == c->id3_stream_idx)
+                        continue;
                     if (s->streams[i]->codecpar->codec_type != type)
                         continue;
 
@@ -1109,6 +1175,8 @@ static int parse_adaptation_sets(AVFormatContext *s)
 end:
     // check for unassigned streams
     for (i = 0; i < s->nb_streams; i++) {
+        if (i == c->id3_stream_idx)
+            continue;
         OutputStream *os = &c->streams[i];
         if (!os->as_idx) {
             av_log(s, AV_LOG_ERROR, "Stream %d is not mapped to an AdaptationSet\n", i);
@@ -1277,6 +1345,8 @@ static int write_manifest(AVFormatContext *s, int final)
         ff_hls_write_playlist_version(c->m3u8_out, 7);
 
         for (i = 0; i < s->nb_streams; i++) {
+            if (i == c->id3_stream_idx)
+                continue;
             char playlist_file[64];
             AVStream *st = s->streams[i];
             OutputStream *os = &c->streams[i];
@@ -1298,6 +1368,8 @@ static int write_manifest(AVFormatContext *s, int final)
         }
 
         for (i = 0; i < s->nb_streams; i++) {
+            if (i == c->id3_stream_idx)
+                continue;
             char playlist_file[64];
             char codec_str[128];
             AVStream *st = s->streams[i];
@@ -1348,6 +1420,16 @@ static int dash_init(AVFormatContext *s)
     int ret = 0, i;
     char *ptr;
     char basename[1024];
+
+    c->id3_stream_idx = -1;
+    for (i = 0; i < s->nb_streams; i++)
+    {
+        if (s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA)
+        {
+            c->id3_stream_idx = i;
+            break;
+        }
+    }
 
     c->nr_of_streams_to_flush = 0;
     if (c->single_file_name)
@@ -1460,6 +1542,9 @@ static int dash_init(AVFormatContext *s)
         return ret;
 
     for (i = 0; i < s->nb_streams; i++) {
+        if (i == c->id3_stream_idx)
+            continue;
+        
         OutputStream *os = &c->streams[i];
         AdaptationSet *as = &c->as[os->as_idx - 1];
         AVFormatContext *ctx;
@@ -1708,6 +1793,8 @@ static int dash_write_header(AVFormatContext *s)
     DASHContext *c = s->priv_data;
     int i, ret;
     for (i = 0; i < s->nb_streams; i++) {
+        if (i == c->id3_stream_idx)
+            continue;
         OutputStream *os = &c->streams[i];
         if ((ret = avformat_write_header(os->ctx, NULL)) < 0)
             return ret;
@@ -1770,6 +1857,42 @@ static void write_styp(AVIOContext *pb)
     avio_wb32(pb, 0); /* minor */
     ffio_wfourcc(pb, "msdh");
     ffio_wfourcc(pb, "msix");
+}
+
+static void write_emsg(AVIOContext *pb, int version, unsigned char *message, int size)
+{
+    int emsg_size = 57 + size;
+    char uri[25] = "urn:scte:scte35:2013:xml";
+    uri[24] = '\0';
+    char value[4] = "999";
+    value[3] = '\0';
+
+    if (version == 1)
+    {     
+        emsg_size += 4;
+        avio_wb32(pb, emsg_size);
+        ffio_wfourcc(pb, "emsg");
+         avio_wb32(pb, version);   /* version, currently player not support version other than 0 */
+        avio_wb32(pb, 9000);    /* timescale */
+        avio_wb64(pb, 0);       /* presentation_time */
+        avio_wb32(pb, 252000);  /* event_duration */
+        avio_wb32(pb, rand());  /* id */
+        avio_write(pb, uri, 25);
+        avio_write(pb, value, 4);
+    } else  /* default version 0 */
+    {
+        avio_wb32(pb, emsg_size);
+        ffio_wfourcc(pb, "emsg");
+        avio_wb32(pb, version);   /* version, currently player not support version other than 0 */
+        avio_write(pb, uri, 25);
+        avio_write(pb, value, 4);
+        avio_wb32(pb, 9000);    /* timescale */
+        avio_wb32(pb, 0);       /* presentation_time_delta */
+        avio_wb32(pb, 252000);  /* event_duration */
+        avio_wb32(pb, rand());  /* id */
+    }
+
+    avio_write(pb, message, size);
 }
 
 static void find_index_range(AVFormatContext *s, const char *full_path,
@@ -1905,6 +2028,8 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
     }
 
     for (i = 0; i < s->nb_streams; i++) {
+        if (i == c->id3_stream_idx)
+            continue;
         OutputStream *os = &c->streams[i];
         AVStream *st = s->streams[i];
         int range_length, index_length = 0;
@@ -1971,6 +2096,8 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
 
     if (c->window_size) {
         for (i = 0; i < s->nb_streams; i++) {
+            if (i == c->id3_stream_idx)
+                continue;
             OutputStream *os = &c->streams[i];
             int remove_count = os->nb_segments - c->window_size - c->extra_window_size;
             if (remove_count > 0)
@@ -1980,6 +2107,8 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
 
     if (final) {
         for (i = 0; i < s->nb_streams; i++) {
+            if (i == c->id3_stream_idx)
+                continue;
             OutputStream *os = &c->streams[i];
             if (os->ctx && os->ctx_inited) {
                 int64_t file_size = avio_tell(os->ctx->pb);
@@ -2048,6 +2177,32 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
     AdaptationSet *as = &c->as[os->as_idx - 1];
     int64_t seg_end_duration, elapsed_duration;
     int ret;
+
+    if (st->codecpar->codec_type == AVMEDIA_TYPE_DATA)
+    {
+        int i;
+        AVPacketList *pktl = (AVPacketList*)av_mallocz(sizeof(*pktl));
+        if (!pktl)
+            return AVERROR(ENOMEM);
+        av_init_packet(&pktl->pkt);
+        ret = av_packet_ref(&pktl->pkt, pkt);
+        if (ret < 0)
+            return ret;
+        if (c->nb_id3_pkt == 0)
+        {
+            c->id3_pkts = pktl;
+        } else
+        {
+            AVPacketList *curr = c->id3_pkts;
+            for (i = 1; i < c->nb_id3_pkt; i++)
+            {
+                curr = curr->next;
+            }
+            curr->next = pktl;
+        }
+        c->nb_id3_pkt++;
+        return 0;
+    }
 
     ret = update_stream_extradata(s, os, pkt, &st->avg_frame_rate);
     if (ret < 0)
@@ -2221,7 +2376,23 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         const char *proto = avio_find_protocol_name(s->url);
         int use_rename = proto && !strcmp(proto, "file");
         if (os->segment_type == SEGMENT_TYPE_MP4)
+        {
             write_styp(os->ctx->pb);
+            if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && c->nb_id3_pkt > 0)
+            {
+
+                unsigned char *buff = NULL;
+                ret = parse_id3(s, &buff);
+                if (ret < 0)
+                {
+                    av_freep(&buff);
+                    return ret;
+                }
+                av_log(NULL, AV_LOG_INFO, "ykuta emsg %s, %d\n", buff, ret);
+                write_emsg(os->ctx->pb, 0, buff, ret);
+                av_freep(&buff);
+            }
+        }
         os->filename[0] = os->full_path[0] = os->temp_path[0] = '\0';
         ff_dash_fill_tmpl_params(os->filename, sizeof(os->filename),
                                  os->media_seg_name, pkt->stream_index,
@@ -2279,6 +2450,8 @@ static int dash_write_trailer(AVFormatContext *s)
 
     if (c->remove_at_exit) {
         for (i = 0; i < s->nb_streams; ++i) {
+            if (i == c->id3_stream_idx)
+                continue;
             OutputStream *os = &c->streams[i];
             dashenc_delete_media_segments(s, os, os->nb_segments);
             dashenc_delete_segment_file(s, os->initfile);
@@ -2303,6 +2476,8 @@ static int dash_write_trailer(AVFormatContext *s)
 static int dash_check_bitstream(struct AVFormatContext *s, const AVPacket *avpkt)
 {
     DASHContext *c = s->priv_data;
+    if (avpkt->stream_index == c->id3_stream_idx)
+        return 1;
     OutputStream *os = &c->streams[avpkt->stream_index];
     AVFormatContext *oc = os->ctx;
     if (oc->oformat->check_bitstream) {
