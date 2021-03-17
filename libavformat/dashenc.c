@@ -59,6 +59,12 @@ typedef enum {
     SEGMENT_TYPE_NB
 } SegmentType;
 
+typedef enum DashFlags {
+    DASH_APPEND_LIST = (1 << 0),
+    DASH_INBANDEVENT_ID3 = (1 << 1),
+    DASH_INBANDEVENT_SCTE35 = (1 << 2),
+} DashFlags;
+
 enum {
     FRAG_TYPE_NONE = 0,
     FRAG_TYPE_EVERY_FRAME,
@@ -140,6 +146,13 @@ typedef struct OutputStream {
     int coding_dependency;
 } OutputStream;
 
+typedef struct DataStream {
+    int stream_idx;
+    AVPacketList *pktls;
+    int nb_pktl;
+    enum AVCodecID codec_id;
+} DataStream;
+
 typedef struct DASHContext {
     const AVClass *class;  /* Class for private options. */
     char *adaptation_sets;
@@ -198,9 +211,9 @@ typedef struct DASHContext {
     AVRational min_playback_rate;
     AVRational max_playback_rate;
 
-    int id3_stream_idx;
-    AVPacketList *id3_pkts;
-    int nb_id3_pkt;
+    int flags;
+    DataStream *d_streams;
+    int nb_d_streams;
 } DASHContext;
 
 static struct codec_string {
@@ -263,18 +276,21 @@ static void dashenc_io_close(AVFormatContext *s, AVIOContext **pb, char *filenam
     }
 }
 
-static int parse_id3(AVFormatContext *s, unsigned char **out)
+static int parse_id3(AVFormatContext *s, DataStream *id3_stream, unsigned char **out)
 {
     DASHContext *c = s->priv_data;
     AVDictionary *metadata = NULL;
     ID3v2ExtraMeta *extra_meta = NULL;
-    AVPacketList *pktl = c->id3_pkts;
+    AVPacketList *pktl = id3_stream->pktls;
     AVIOContext ioctx;
     int i, size, ret = 0;
     AVDictionaryEntry *t = NULL;
     AVBPrint bprint;
     int cnt = 0;
 
+    for (i = 0; i < pktl->pkt.size; i++)
+        av_log(c, AV_LOG_INFO, "%d ", pktl->pkt.data[i]);
+    av_log(c, AV_LOG_INFO, "\n");
 	ffio_init_context(&ioctx, pktl->pkt.data, pktl->pkt.size, 0, NULL, NULL, NULL, NULL);
 
     ff_id3v2_read_dict(&ioctx, &metadata, ID3v2_DEFAULT_MAGIC, &extra_meta);
@@ -304,9 +320,9 @@ static int parse_id3(AVFormatContext *s, unsigned char **out)
     }
 
 free:
-    c->id3_pkts = pktl->next;
+    id3_stream->pktls = pktl->next;
     av_freep(&pktl);
-    c->nb_id3_pkt--;
+    id3_stream->nb_pktl--;
     return ret;
 }
 
@@ -356,8 +372,10 @@ static int init_segment_types(AVFormatContext *s)
     DASHContext *c = s->priv_data;
     int has_mp4_streams = 0;
     for (int i = 0; i < s->nb_streams; ++i) {
-        if (i == c->id3_stream_idx)
+        /* ignore data streams */
+        if (s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA)
             continue;
+                
         OutputStream *os = &c->streams[i];
         SegmentType segment_type = select_segment_type(
             c->segment_type_option, s->streams[i]->codecpar->codec_id);
@@ -679,8 +697,10 @@ static void dash_free(AVFormatContext *s)
     if (!c->streams)
         return;
     for (i = 0; i < s->nb_streams; i++) {
-        if (i == c->id3_stream_idx)
+        /* ignore data streams */
+        if (s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA)
             continue;
+                
         OutputStream *os = &c->streams[i];
         if (os->ctx && os->ctx->pb) {
             if (!c->single_file)
@@ -887,8 +907,10 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
     if (as->descriptor)
         avio_printf(out, "\t\t\t%s\n", as->descriptor);
     for (i = 0; i < s->nb_streams; i++) {
-        if (i == c->id3_stream_idx)
+        /* ignore data streams */
+        if (s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA)
             continue;
+                
         AVStream *st = s->streams[i];
         OutputStream *os = &c->streams[i];
         char bandwidth_str[64] = {'\0'};
@@ -919,7 +941,11 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
                 avio_printf(out, " codingDependency=\"false\"");
             avio_printf(out, ">\n");
         } else {
-            if (c->id3_stream_idx > 0)
+            if (c->flags & DASH_INBANDEVENT_ID3)
+            {
+                avio_printf(out, "\t\t\t<InbandEventStream schemeIdUri=\"urn:scte:scte35:2013:xml\" value=\"999\"/>\n");
+            }
+            if (c->flags & DASH_INBANDEVENT_SCTE35)
             {
                 avio_printf(out, "\t\t\t<InbandEventStream schemeIdUri=\"urn:scte:scte35:2013:xml\" value=\"999\"/>\n");
             }
@@ -941,6 +967,22 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
         avio_printf(out, "\t\t\t</Representation>\n");
     }
     avio_printf(out, "\t\t</AdaptationSet>\n");
+
+    return 0;
+}
+
+static int add_datastream(AVFormatContext *s, DataStream **ds)
+{
+    DASHContext *c = s->priv_data;
+    void *mem;
+
+    mem = av_realloc(c->d_streams, sizeof(*c->d_streams) * (c->nb_d_streams + 1));
+    if (!mem)
+        return AVERROR(ENOMEM);
+    c->d_streams = mem;
+    *ds = &c->d_streams[c->nb_d_streams];
+    memset(*ds, 0, sizeof(**ds));
+    c->nb_d_streams++;
 
     return 0;
 }
@@ -1003,8 +1045,10 @@ static int parse_adaptation_sets(AVFormatContext *s)
     // default: one AdaptationSet for each stream
     if (!p) {
         for (i = 0; i < s->nb_streams; i++) {
-            if (i == c->id3_stream_idx)
+            /* ignore data streams */
+            if (s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA)
                 continue;
+                
             if ((ret = add_adaptation_set(s, &as, s->streams[i]->codecpar->codec_type)) < 0)
                 return ret;
             as->id = i;
@@ -1137,8 +1181,10 @@ static int parse_adaptation_sets(AVFormatContext *s)
                 av_log(s, AV_LOG_DEBUG, "Map all streams of type %s\n", idx_str);
 
                 for (i = 0; i < s->nb_streams; i++) {
-                    if (i == c->id3_stream_idx)
+                    /* ignore data streams */
+                    if (s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA)
                         continue;
+                
                     if (s->streams[i]->codecpar->codec_type != type)
                         continue;
 
@@ -1175,8 +1221,10 @@ static int parse_adaptation_sets(AVFormatContext *s)
 end:
     // check for unassigned streams
     for (i = 0; i < s->nb_streams; i++) {
-        if (i == c->id3_stream_idx)
+        /* ignore data streams */
+        if (s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA)
             continue;
+                
         OutputStream *os = &c->streams[i];
         if (!os->as_idx) {
             av_log(s, AV_LOG_ERROR, "Stream %d is not mapped to an AdaptationSet\n", i);
@@ -1345,8 +1393,10 @@ static int write_manifest(AVFormatContext *s, int final)
         ff_hls_write_playlist_version(c->m3u8_out, 7);
 
         for (i = 0; i < s->nb_streams; i++) {
-            if (i == c->id3_stream_idx)
+            /* ignore data streams */
+            if (s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA)
                 continue;
+                
             char playlist_file[64];
             AVStream *st = s->streams[i];
             OutputStream *os = &c->streams[i];
@@ -1368,8 +1418,10 @@ static int write_manifest(AVFormatContext *s, int final)
         }
 
         for (i = 0; i < s->nb_streams; i++) {
-            if (i == c->id3_stream_idx)
+            /* ignore data streams */
+            if (s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA)
                 continue;
+                
             char playlist_file[64];
             char codec_str[128];
             AVStream *st = s->streams[i];
@@ -1420,14 +1472,35 @@ static int dash_init(AVFormatContext *s)
     int ret = 0, i;
     char *ptr;
     char basename[1024];
+    DataStream *ds;
 
-    c->id3_stream_idx = -1;
-    for (i = 0; i < s->nb_streams; i++)
+    if (c->flags & DASH_INBANDEVENT_ID3)
     {
-        if (s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA)
+        for (i = 0; i < s->nb_streams; i++)
         {
-            c->id3_stream_idx = i;
-            break;
+            if (s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA && s->streams[i]->codecpar->codec_id == AV_CODEC_ID_TIMED_ID3)
+            {
+                ret = add_datastream(s, &ds);
+                if (ret < 0)
+                    return ret;
+                ds->codec_id = AV_CODEC_ID_TIMED_ID3;
+                ds->stream_idx = i;
+            }
+        }
+    }
+
+    if (c->flags & DASH_INBANDEVENT_SCTE35)
+    {
+        for (i = 0; i < s->nb_streams; i++)
+        {
+            if (s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA && s->streams[i]->codecpar->codec_id == DASH_INBANDEVENT_SCTE35)
+            {
+                ret = add_datastream(s, &ds);
+                if (ret < 0)
+                    return ret;
+                ds->codec_id = DASH_INBANDEVENT_SCTE35;
+                ds->stream_idx = i;
+            }
         }
     }
 
@@ -1542,7 +1615,8 @@ static int dash_init(AVFormatContext *s)
         return ret;
 
     for (i = 0; i < s->nb_streams; i++) {
-        if (i == c->id3_stream_idx)
+        /* ignore data streams */
+        if (s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA)
             continue;
         
         OutputStream *os = &c->streams[i];
@@ -1793,8 +1867,10 @@ static int dash_write_header(AVFormatContext *s)
     DASHContext *c = s->priv_data;
     int i, ret;
     for (i = 0; i < s->nb_streams; i++) {
-        if (i == c->id3_stream_idx)
+        /* ignore data streams */
+        if (s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA)
             continue;
+                
         OutputStream *os = &c->streams[i];
         if ((ret = avformat_write_header(os->ctx, NULL)) < 0)
             return ret;
@@ -2028,8 +2104,10 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
     }
 
     for (i = 0; i < s->nb_streams; i++) {
-        if (i == c->id3_stream_idx)
+        /* ignore data streams */
+        if (s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA)
             continue;
+                
         OutputStream *os = &c->streams[i];
         AVStream *st = s->streams[i];
         int range_length, index_length = 0;
@@ -2096,8 +2174,10 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
 
     if (c->window_size) {
         for (i = 0; i < s->nb_streams; i++) {
-            if (i == c->id3_stream_idx)
+            /* ignore data streams */
+            if (s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA)
                 continue;
+                
             OutputStream *os = &c->streams[i];
             int remove_count = os->nb_segments - c->window_size - c->extra_window_size;
             if (remove_count > 0)
@@ -2107,8 +2187,10 @@ static int dash_flush(AVFormatContext *s, int final, int stream)
 
     if (final) {
         for (i = 0; i < s->nb_streams; i++) {
-            if (i == c->id3_stream_idx)
+            /* ignore data streams */
+            if (s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA)
                 continue;
+                
             OutputStream *os = &c->streams[i];
             if (os->ctx && os->ctx_inited) {
                 int64_t file_size = avio_tell(os->ctx->pb);
@@ -2180,27 +2262,41 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
 
     if (st->codecpar->codec_type == AVMEDIA_TYPE_DATA)
     {
+        DataStream *ds = NULL;
+        AVPacketList *pktl = NULL;
+        AVPacketList *curr = NULL;
         int i;
-        AVPacketList *pktl = (AVPacketList*)av_mallocz(sizeof(*pktl));
-        if (!pktl)
-            return AVERROR(ENOMEM);
-        av_init_packet(&pktl->pkt);
-        ret = av_packet_ref(&pktl->pkt, pkt);
-        if (ret < 0)
-            return ret;
-        if (c->nb_id3_pkt == 0)
+        if (c->flags & (DASH_INBANDEVENT_ID3 | DASH_INBANDEVENT_SCTE35))
         {
-            c->id3_pkts = pktl;
-        } else
-        {
-            AVPacketList *curr = c->id3_pkts;
-            for (i = 1; i < c->nb_id3_pkt; i++)
+            for (i = 0; i < c->nb_d_streams; i++)
             {
-                curr = curr->next;
+                if (c->d_streams[i].stream_idx == pkt->stream_index)
+                {
+                    ds = &c->d_streams[i];
+                }
             }
-            curr->next = pktl;
+
+            pktl = (AVPacketList*)av_mallocz(sizeof(*pktl));
+            if (!pktl)
+                return AVERROR(ENOMEM);
+            av_init_packet(&pktl->pkt);
+            ret = av_packet_ref(&pktl->pkt, pkt);
+            if (ret < 0)
+                return ret;
+            if (ds->nb_pktl == 0)
+            {
+                ds->pktls = pktl;
+            } else
+            {
+                curr = ds->pktls;
+                for (i = 1; i < ds->nb_pktl; i++)
+                {
+                    curr = curr->next;
+                }
+                curr->next = pktl;
+            }
+            ds->nb_pktl++;
         }
-        c->nb_id3_pkt++;
         return 0;
     }
 
@@ -2378,19 +2474,24 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         if (os->segment_type == SEGMENT_TYPE_MP4)
         {
             write_styp(os->ctx->pb);
-            if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && c->nb_id3_pkt > 0)
+            if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
             {
-
-                unsigned char *buff = NULL;
-                ret = parse_id3(s, &buff);
-                if (ret < 0)
+                int i;
+                for (i = 0; i < c->nb_d_streams; i++)
                 {
-                    av_freep(&buff);
-                    return ret;
+                    if (c->d_streams[i].codec_id == AV_CODEC_ID_TIMED_ID3 && c->d_streams[i].nb_pktl > 0)
+                    {
+                        unsigned char *buff = NULL;
+                        ret = parse_id3(s, &c->d_streams[i], &buff);
+                        if (ret < 0)
+                        {
+                            av_freep(&buff);
+                            return ret;
+                        }
+                        write_emsg(os->ctx->pb, 0, buff, ret);
+                        av_freep(&buff);
+                    }
                 }
-                av_log(NULL, AV_LOG_INFO, "ykuta emsg %s, %d\n", buff, ret);
-                write_emsg(os->ctx->pb, 0, buff, ret);
-                av_freep(&buff);
             }
         }
         os->filename[0] = os->full_path[0] = os->temp_path[0] = '\0';
@@ -2450,8 +2551,10 @@ static int dash_write_trailer(AVFormatContext *s)
 
     if (c->remove_at_exit) {
         for (i = 0; i < s->nb_streams; ++i) {
-            if (i == c->id3_stream_idx)
+            /* ignore data streams */
+            if (s->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA)
                 continue;
+
             OutputStream *os = &c->streams[i];
             dashenc_delete_media_segments(s, os, os->nb_segments);
             dashenc_delete_segment_file(s, os->initfile);
@@ -2476,8 +2579,11 @@ static int dash_write_trailer(AVFormatContext *s)
 static int dash_check_bitstream(struct AVFormatContext *s, const AVPacket *avpkt)
 {
     DASHContext *c = s->priv_data;
-    if (avpkt->stream_index == c->id3_stream_idx)
+    int i;
+    /* check and ignore if is data packet */
+    if (s->streams[avpkt->stream_index]->codecpar->codec_type == AVMEDIA_TYPE_DATA)
         return 1;
+
     OutputStream *os = &c->streams[avpkt->stream_index];
     AVFormatContext *oc = os->ctx;
     if (oc->oformat->check_bitstream) {
@@ -2545,6 +2651,10 @@ static const AVOption options[] = {
     { "target_latency", "Set desired target latency for Low-latency dash", OFFSET(target_latency), AV_OPT_TYPE_DURATION, { .i64 = 0 }, 0, INT_MAX, E },
     { "min_playback_rate", "Set desired minimum playback rate", OFFSET(min_playback_rate), AV_OPT_TYPE_RATIONAL, { .dbl = 1.0 }, 0.5, 1.5, E },
     { "max_playback_rate", "Set desired maximum playback rate", OFFSET(max_playback_rate), AV_OPT_TYPE_RATIONAL, { .dbl = 1.0 }, 0.5, 1.5, E },
+    { "dash_flags", "Set flags affecting DASH playlist and media file generation", OFFSET(flags), AV_OPT_TYPE_FLAGS, {.i64 = 0 }, 0, UINT_MAX, E, "flags"},
+    { "append_list", "Append the new segments into old hls segment list", 0, AV_OPT_TYPE_CONST, {.i64 = DASH_APPEND_LIST }, 0, UINT_MAX, E, "flags"},
+    { "inbandevent_id3", "Insert InbandEventStream tag for ID3 data to audio stream", 0, AV_OPT_TYPE_CONST, {.i64 = DASH_INBANDEVENT_ID3 }, 0, UINT_MAX, E, "flags"},
+    { "inbandevent_scte35", "Insert InbandEventStream tag for SCTE35 data to audio stream", 0, AV_OPT_TYPE_CONST, {.i64 = DASH_INBANDEVENT_SCTE35 }, 0, UINT_MAX, E, "flags"},
     { NULL },
 };
 
