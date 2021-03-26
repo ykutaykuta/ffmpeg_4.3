@@ -346,6 +346,9 @@ static int get_dvb_stream_type(AVFormatContext *s, AVStream *st)
     case AV_CODEC_ID_OPUS:
         stream_type = STREAM_TYPE_PRIVATE_DATA;
         break;
+    case AV_CODEC_ID_SCTE_35:
+        stream_type = 0x86;
+        break;
     case AV_CODEC_ID_TIMED_ID3:
         stream_type = STREAM_TYPE_METADATA;
         break;
@@ -435,6 +438,7 @@ static int mpegts_write_pmt(AVFormatContext *s, MpegTSService *service)
     program_info_length_ptr = q;
     q += 2; /* patched after */
 
+    put_registration_descriptor(&q, MKTAG('C', 'U', 'E', 'I'));
     /* put program info here */
     if (ts->m2ts_mode) {
         put_registration_descriptor(&q, MKTAG('H', 'D', 'M', 'V'));
@@ -708,6 +712,9 @@ static int mpegts_write_pmt(AVFormatContext *s, MpegTSService *service)
                 putbuf(&q, tag, strlen(tag));
                 *q++ = 0;            /* metadata service ID */
                 *q++ = 0xF;          /* metadata_locator_record_flag|MPEG_carriage_flags|reserved */
+            } else if (st->codecpar->codec_id == AV_CODEC_ID_SCTE_35)
+            {
+                // put_registration_descriptor(&q, MKTAG('C', 'U', 'E', 'I'));
             }
             break;
         }
