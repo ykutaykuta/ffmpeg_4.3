@@ -83,4 +83,9 @@ void ff_mov_cenc_write_stbl_atoms(MOVMuxCencContext* ctx, AVIOContext *pb);
  */
 int ff_mov_cenc_write_sinf_tag(struct MOVTrack* track, AVIOContext *pb, uint8_t* kid);
 
+/**
+ * Parse HEVC NAL units from annex B format, the nal size and type are written in the clear while the body is encrypted
+ */
+int ff_mov_cenc_hevc_annexb2mp4(MOVMuxCencContext* ctx, AVIOContext *pb, const uint8_t *buf_in, int size, int filter_ps, int *ps_count);
+
 #endif /* AVFORMAT_MOVENCCENC_H */
