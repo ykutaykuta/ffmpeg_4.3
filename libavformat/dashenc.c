@@ -288,38 +288,38 @@ static int parse_id3(AVFormatContext *s, DataStream *id3_stream, unsigned char *
     AVBPrint bprint;
     int cnt = 0;
 
-    for (i = 0; i < pktl->pkt.size; i++)
-        av_log(c, AV_LOG_INFO, "%d ", pktl->pkt.data[i]);
-    av_log(c, AV_LOG_INFO, "\n");
-	ffio_init_context(&ioctx, pktl->pkt.data, pktl->pkt.size, 0, NULL, NULL, NULL, NULL);
+	// ffio_init_context(&ioctx, pktl->pkt.data, pktl->pkt.size, 0, NULL, NULL, NULL, NULL);
 
-    ff_id3v2_read_dict(&ioctx, &metadata, ID3v2_DEFAULT_MAGIC, &extra_meta);
-    if (metadata)
-    {
-        if (!av_dict_count(metadata))
-        {
-            *out = av_strdup("");
-            ret = *out ? 0 : AVERROR(ENOMEM);
-        }
+    // ff_id3v2_read_dict(&ioctx, &metadata, ID3v2_DEFAULT_MAGIC, &extra_meta);
+    // if (metadata)
+    // {
+    //     if (!av_dict_count(metadata))
+    //     {
+    //         *out = av_strdup("");
+    //         ret = *out ? 0 : AVERROR(ENOMEM);
+    //     }
 
-        av_bprint_init(&bprint, 64, AV_BPRINT_SIZE_UNLIMITED);
-        av_bprint_append_data(&bprint, "{", 1);
-        while ((t = av_dict_get(metadata, "", t, AV_DICT_IGNORE_SUFFIX)))
-        {
-            if (cnt++)
-                av_bprint_append_data(&bprint, ",", 1);
-            av_bprint_escape(&bprint, t->key, NULL, AV_ESCAPE_MODE_BACKSLASH, 0);
-            av_bprint_append_data(&bprint, ":", 1);
-            av_bprint_escape(&bprint, t->value, NULL, AV_ESCAPE_MODE_BACKSLASH, 0);
-        }
-        av_bprint_append_data(&bprint, "}", 1);
-        ret = av_bprint_finalize(&bprint, out);
-        if (ret < 0)
-            return ret;
-        ret = strlen(*out);
-    }
+    //     av_bprint_init(&bprint, 64, AV_BPRINT_SIZE_UNLIMITED);
+    //     av_bprint_append_data(&bprint, "{", 1);
+    //     while ((t = av_dict_get(metadata, "", t, AV_DICT_IGNORE_SUFFIX)))
+    //     {
+    //         if (cnt++)
+    //             av_bprint_append_data(&bprint, ",", 1);
+    //         av_bprint_escape(&bprint, t->key, NULL, AV_ESCAPE_MODE_BACKSLASH, 0);
+    //         av_bprint_append_data(&bprint, ":", 1);
+    //         av_bprint_escape(&bprint, t->value, NULL, AV_ESCAPE_MODE_BACKSLASH, 0);
+    //     }
+    //     av_bprint_append_data(&bprint, "}", 1);
+    //     ret = av_bprint_finalize(&bprint, out);
+    //     if (ret < 0)
+    //         return ret;
+    //     ret = strlen(*out);
+    // }
 
-free:
+    *out = av_mallocz(pktl->pkt.size);
+    memcpy(*out, pktl->pkt.data, pktl->pkt.size);
+    ret = pktl->pkt.size;
+
     id3_stream->pktls = pktl->next;
     av_freep(&pktl);
     id3_stream->nb_pktl--;
@@ -1937,11 +1937,11 @@ static void write_styp(AVIOContext *pb)
 
 static void write_emsg(AVIOContext *pb, int version, unsigned char *message, int size)
 {
-    int emsg_size = 57 + size;
-    char uri[25] = "urn:scte:scte35:2013:xml";
-    uri[24] = '\0';
-    char value[4] = "999";
-    value[3] = '\0';
+    const char *uri = "https://aomedia.org/emsg/ID3";
+    int uri_len = strlen(uri) + 1;
+    const char *value = "999";
+    int value_len = strlen(value) + 1;
+    int emsg_size = 28 + uri_len + value_len + size;
 
     if (version == 1)
     {     
@@ -1953,15 +1953,15 @@ static void write_emsg(AVIOContext *pb, int version, unsigned char *message, int
         avio_wb64(pb, 0);       /* presentation_time */
         avio_wb32(pb, 252000);  /* event_duration */
         avio_wb32(pb, rand());  /* id */
-        avio_write(pb, uri, 25);
-        avio_write(pb, value, 4);
+        avio_write(pb, uri, uri_len);
+        avio_write(pb, value, value_len);
     } else  /* default version 0 */
     {
         avio_wb32(pb, emsg_size);
         ffio_wfourcc(pb, "emsg");
         avio_wb32(pb, version);   /* version, currently player not support version other than 0 */
-        avio_write(pb, uri, 25);
-        avio_write(pb, value, 4);
+        avio_write(pb, uri, uri_len);
+        avio_write(pb, value, value_len);
         avio_wb32(pb, 9000);    /* timescale */
         avio_wb32(pb, 0);       /* presentation_time_delta */
         avio_wb32(pb, 252000);  /* event_duration */
@@ -2474,7 +2474,7 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         if (os->segment_type == SEGMENT_TYPE_MP4)
         {
             write_styp(os->ctx->pb);
-            if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+            if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
             {
                 int i;
                 for (i = 0; i < c->nb_d_streams; i++)

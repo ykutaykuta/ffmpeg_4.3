@@ -255,6 +255,42 @@ typedef struct HLSContext {
     int has_video_m3u8; /* has video stream m3u8 list */
 } HLSContext;
 
+static void write_emsg(AVIOContext *pb, int version, unsigned char *message, int size)
+{
+    const char *uri = "https://aomedia.org/emsg/ID3";
+    int uri_len = strlen(uri) + 1;
+    const char *value = "999";
+    int value_len = strlen(value) + 1;
+    int emsg_size = 28 + uri_len + value_len + size;
+
+    if (version == 1)
+    {
+        emsg_size += 4;
+        avio_wb32(pb, emsg_size);
+        ffio_wfourcc(pb, "emsg");
+        avio_wb32(pb, version);   /* version, currently player not support version other than 0 */
+        avio_wb32(pb, 9000);    /* timescale */
+        avio_wb64(pb, 0);       /* presentation_time */
+        avio_wb32(pb, 252000);  /* event_duration */
+        avio_wb32(pb, rand());  /* id */
+        avio_write(pb, uri, uri_len);
+        avio_write(pb, value, value_len);
+    } else  /* default version 0 */
+    {
+        avio_wb32(pb, emsg_size);
+        ffio_wfourcc(pb, "emsg");
+        avio_wb32(pb, version);   /* version, currently player not support version other than 0 */
+        avio_write(pb, uri, uri_len);
+        avio_write(pb, value, value_len);
+        avio_wb32(pb, 9000);    /* timescale */
+        avio_wb32(pb, 0);       /* presentation_time_delta */
+        avio_wb32(pb, 252000);  /* event_duration */
+        avio_wb32(pb, rand());  /* id */
+    }
+
+    avio_write(pb, message, size);
+}
+
 static int hlsenc_io_open(AVFormatContext *s, AVIOContext **pb, char *filename,
                           AVDictionary **options)
 {
