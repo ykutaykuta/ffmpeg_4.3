@@ -49,6 +49,8 @@
 #include "packet.h"
 #include "version.h"
 
+#include "ttml_common.h"
+
 /**
  * @defgroup libavc libavcodec
  * Encoding/Decoding Library

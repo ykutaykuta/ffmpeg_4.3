@@ -378,6 +378,8 @@ static void set_codec_str(AVFormatContext *s, AVCodecParameters *par,
         tags[0] = ff_codec_movvideo_tags;
     else if (par->codec_type == AVMEDIA_TYPE_AUDIO)
         tags[0] = ff_codec_movaudio_tags;
+    else if (par->codec_type == AVMEDIA_TYPE_SUBTITLE)
+        tags[0] = ff_codec_movsubtitle_tags;
     else
         return;
 
@@ -806,16 +808,40 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
     AVDictionaryEntry *lang, *role;
     int i;
 
-    avio_printf(out, "\t\t<AdaptationSet id=\"%d\" contentType=\"%s\" startWithSAP=\"1\" segmentAlignment=\"true\" bitstreamSwitching=\"true\"",
-                as->id, as->media_type == AVMEDIA_TYPE_VIDEO ? "video" : "audio");
-    if (as->media_type == AVMEDIA_TYPE_VIDEO && as->max_frame_rate.num && !as->ambiguous_frame_rate && av_cmp_q(as->min_frame_rate, as->max_frame_rate) < 0)
-        avio_printf(out, " maxFrameRate=\"%d/%d\"", as->max_frame_rate.num, as->max_frame_rate.den);
-    else if (as->media_type == AVMEDIA_TYPE_VIDEO && as->max_frame_rate.num && !as->ambiguous_frame_rate && !av_cmp_q(as->min_frame_rate, as->max_frame_rate))
-        avio_printf(out, " frameRate=\"%d/%d\"", as->max_frame_rate.num, as->max_frame_rate.den);
-    if (as->media_type == AVMEDIA_TYPE_VIDEO) {
+    // write AdaptationSet tag
+    if (as->media_type == AVMEDIA_TYPE_VIDEO)
+    {
+        avio_printf(out, "\t\t<AdaptationSet id=\"%d\" contentType=\"%s\" startWithSAP=\"1\" segmentAlignment=\"true\"                              bitstreamSwitching=\"true\"", as->id, "video");
+        if (as->max_frame_rate.num && !as->ambiguous_frame_rate && av_cmp_q(as->min_frame_rate, as->max_frame_rate) < 0)
+        {
+            avio_printf(out, " maxFrameRate=\"%d/%d\"", as->max_frame_rate.num, as->max_frame_rate.den);
+        }
+        else if (as->max_frame_rate.num && !as->ambiguous_frame_rate && !av_cmp_q(as->min_frame_rate, as->max_frame_rate))
+        {
+            avio_printf(out, " frameRate=\"%d/%d\"", as->max_frame_rate.num, as->max_frame_rate.den);
+        }
         avio_printf(out, " maxWidth=\"%d\" maxHeight=\"%d\"", as->max_width, as->max_height);
         avio_printf(out, " par=\"%d:%d\"", as->par.num, as->par.den);
     }
+    else if (as->media_type == AVMEDIA_TYPE_AUDIO)
+    {
+        avio_printf(out, "\t\t<AdaptationSet id=\"%d\" contentType=\"%s\" startWithSAP=\"1\" segmentAlignment=\"true\" bitstreamSwitching=\"true\"", as->id, "audio");
+    }
+    else
+    {
+        avio_printf(out, "\t\t<AdaptationSet id=\"%d\" contentType=\"%s\" startWithSAP=\"1\" segmentAlignment=\"true\" ", as->id, "text");
+    }
+
+    // avio_printf(out, "\t\t<AdaptationSet id=\"%d\" contentType=\"%s\" startWithSAP=\"1\" segmentAlignment=\"true\" bitstreamSwitching=\"true\"",
+    //             as->id, as->media_type == AVMEDIA_TYPE_VIDEO ? "video" : "audio");
+    // if (as->media_type == AVMEDIA_TYPE_VIDEO && as->max_frame_rate.num && !as->ambiguous_frame_rate && av_cmp_q(as->min_frame_rate, as->max_frame_rate) < 0)
+    //     avio_printf(out, " maxFrameRate=\"%d/%d\"", as->max_frame_rate.num, as->max_frame_rate.den);
+    // else if (as->media_type == AVMEDIA_TYPE_VIDEO && as->max_frame_rate.num && !as->ambiguous_frame_rate && !av_cmp_q(as->min_frame_rate, as->max_frame_rate))
+    //     avio_printf(out, " frameRate=\"%d/%d\"", as->max_frame_rate.num, as->max_frame_rate.den);
+    // if (as->media_type == AVMEDIA_TYPE_VIDEO) {
+    //     avio_printf(out, " maxWidth=\"%d\" maxHeight=\"%d\"", as->max_width, as->max_height);
+    //     avio_printf(out, " par=\"%d:%d\"", as->par.num, as->par.den);
+    // }
     lang = av_dict_get(as->metadata, "language", NULL, 0);
     if (lang)
         avio_printf(out, " lang=\"%s\"", lang->value);
@@ -860,11 +886,15 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
             if (!os->coding_dependency)
                 avio_printf(out, " codingDependency=\"false\"");
             avio_printf(out, ">\n");
-        } else {
+        } else if (as->media_type == AVMEDIA_TYPE_AUDIO) {
             avio_printf(out, "\t\t\t<Representation id=\"%d\" mimeType=\"audio/%s\" codecs=\"%s\"%s audioSamplingRate=\"%d\">\n",
                 i, os->format_name, os->codec_str, bandwidth_str, s->streams[i]->codecpar->sample_rate);
             avio_printf(out, "\t\t\t\t<AudioChannelConfiguration schemeIdUri=\"urn:mpeg:dash:23003:3:audio_channel_configuration:2011\" value=\"%d\" />\n",
                 s->streams[i]->codecpar->channels);
+        } else 
+        {
+            avio_printf(out, "\t\t\t<Representation id=\"%d\" mimeType=\"application/%s\" codecs=\"%s\"%s>\n",
+                i, os->format_name, os->codec_str, bandwidth_str);
         }
         if (!final && c->write_prft && os->producer_reference_time_str[0]) {
             avio_printf(out, "\t\t\t\t<ProducerReferenceTime id=\"%d\" inband=\"true\" type=\"%s\" wallClockTime=\"%s\" presentationTime=\"%"PRId64"\">\n",
@@ -1234,6 +1264,14 @@ static int write_manifest(AVFormatContext *s, int final)
         if ((ret = write_adaptation_set(s, out, i, final)) < 0)
             return ret;
     }
+
+    // avio_printf(out, "\t\t<AdaptationSet id=\"2\" contentType=\"text\" lang=\"vi\" mimeType=\"application/ttml+xml\">\n");
+    // avio_printf(out, "\t\t\t<Role schemeIdUri=\"urn:mpeg:dash:role:2011\" value=\"subtitle\"/>\n");
+    // avio_printf(out, "\t\t\t<Representation bandwidth=\"124\" id=\"subtitles/vi\">\n");
+    // avio_printf(out, "\t\t\t\t<BaseURL>in.ttml</BaseURL>\n");
+    // avio_printf(out, "\t\t\t</Representation>\n");
+    // avio_printf(out, "\t\t</AdaptationSet>\n");
+
     avio_printf(out, "\t</Period>\n");
 
     if (c->utc_timing_url)
@@ -2049,6 +2087,17 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
     int64_t seg_end_duration, elapsed_duration;
     int ret;
 
+    if (st->codecpar->codec_id == AV_CODEC_ID_TTML)
+    {
+        AVDictionaryEntry *lang = av_dict_get(s->metadata, "language", NULL, 0);
+        const char *printed_lang = (lang && lang->value) ? lang->value : "";
+        ret = ttml_write_mdat_sub_pkt(pkt, printed_lang, &st->time_base);
+        if (ret < 0)
+        {
+            return ret;
+        }
+    }
+
     ret = update_stream_extradata(s, os, pkt, &st->avg_frame_rate);
     if (ret < 0)
         return ret;
@@ -2133,9 +2182,9 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
         os->coding_dependency |= os->parser->pict_type != AV_PICTURE_TYPE_I;
     }
 
-    if (pkt->flags & AV_PKT_FLAG_KEY && os->packets_written &&
-        av_compare_ts(elapsed_duration, st->time_base,
-                      seg_end_duration, AV_TIME_BASE_Q) >= 0) {
+    if ((pkt->flags & AV_PKT_FLAG_KEY && os->packets_written &&
+        av_compare_ts(elapsed_duration, st->time_base, seg_end_duration, AV_TIME_BASE_Q) >= 0) ||
+        (st->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE && os->packets_written)) {
         if (!c->has_video || st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
             c->last_duration = av_rescale_q(pkt->pts - os->start_pts,
                     st->time_base,

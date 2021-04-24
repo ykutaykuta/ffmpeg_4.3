@@ -1721,6 +1721,21 @@ static int mov_write_subtitle_tag(AVIOContext *pb, MOVTrack *track)
 
     if (track->par->codec_id == AV_CODEC_ID_DVD_SUBTITLE)
         mov_write_esds_tag(pb, track);
+    else if (track->par->codec_id == AV_CODEC_ID_TTML)
+    {
+        /* Write namepsace */
+        char *namespace = av_asprintf("%s %s %s %s %s %s", TTML_XMLNS_TTML, TTML_XMLNS_TTP,
+                                      TTML_XMLNS_TTS, TTML_XMLNS_TTM, TTML_XMLNS_EBUTTS, TTML_XMLNS_EBUTTM);
+        if (!namespace)
+            return AVERROR(ENOMEM);
+        avio_write(pb, namespace, strlen(namespace));
+        avio_w8(pb, 0);
+        av_freep(&namespace);
+        /* Write schema location */
+        avio_w8(pb, 0);
+        /* Write image mime type */
+        avio_w8(pb, 0);
+    }
     else if (track->par->extradata_size)
         avio_write(pb, track->par->extradata, track->par->extradata_size);
 
@@ -2590,6 +2605,14 @@ static int mov_write_nmhd_tag(AVIOContext *pb)
 {
     avio_wb32(pb, 12);
     ffio_wfourcc(pb, "nmhd");
+    avio_wb32(pb, 0);
+    return 12;
+}
+
+static int mov_write_sthd_tag(AVIOContext *pb)
+{
+    avio_wb32(pb, 12);
+    ffio_wfourcc(pb, "sthd");
     avio_wb32(pb, 0);
     return 12;
 }
@@ -7031,6 +7054,7 @@ const AVCodecTag codec_mp4_tags[] = {
     { AV_CODEC_ID_EVRC,            MKTAG('m', 'p', '4', 'a') },
     { AV_CODEC_ID_DVD_SUBTITLE,    MKTAG('m', 'p', '4', 's') },
     { AV_CODEC_ID_MOV_TEXT,        MKTAG('t', 'x', '3', 'g') },
+    { AV_CODEC_ID_TTML,            MKTAG('s', 't', 'p', 'p') },
     { AV_CODEC_ID_BIN_DATA,        MKTAG('g', 'p', 'm', 'd') },
     { AV_CODEC_ID_MPEGH_3D_AUDIO,  MKTAG('m', 'h', 'm', '1') },
     { AV_CODEC_ID_NONE,               0 },

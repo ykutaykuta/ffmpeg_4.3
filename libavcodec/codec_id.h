@@ -514,9 +514,11 @@ enum AVCodecID {
     AV_CODEC_ID_HDMV_PGS_SUBTITLE,
     AV_CODEC_ID_DVB_TELETEXT,
     AV_CODEC_ID_SRT,
+    AV_CODEC_ID_TTML,
 
     AV_CODEC_ID_MICRODVD   = 0x17800,
     AV_CODEC_ID_EIA_608,
+    AV_CODEC_ID_EIA_708,
     AV_CODEC_ID_JACOSUB,
     AV_CODEC_ID_SAMI,
     AV_CODEC_ID_REALTEXT,
@@ -530,7 +532,6 @@ enum AVCodecID {
     AV_CODEC_ID_PJS,
     AV_CODEC_ID_ASS,
     AV_CODEC_ID_HDMV_TEXT_SUBTITLE,
-    AV_CODEC_ID_TTML,
     AV_CODEC_ID_ARIB_CAPTION,
 
     /* other specific kind of codecs (generally used for attachments) */
