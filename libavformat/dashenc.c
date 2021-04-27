@@ -2087,14 +2087,25 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
     int64_t seg_end_duration, elapsed_duration;
     int ret;
 
-    if (st->codecpar->codec_id == AV_CODEC_ID_TTML)
+    if (st->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE)
     {
         AVDictionaryEntry *lang = av_dict_get(s->metadata, "language", NULL, 0);
         const char *printed_lang = (lang && lang->value) ? lang->value : "";
-        ret = ttml_write_mdat_sub_pkt(pkt, printed_lang, &st->time_base);
-        if (ret < 0)
+        if (st->codecpar->codec_id == AV_CODEC_ID_TTML)
         {
-            return ret;
+            ret = ttml_write_mdat_sub_pkt(pkt, printed_lang, &st->time_base);
+            if (ret < 0)
+            {
+                return ret;
+            }
+        }
+        else if (st->codecpar->codec_id == AV_CODEC_ID_WEBVTT)
+        {
+            ret = webvtt_write_mdat_sub_pkt(pkt, printed_lang, &st->time_base);
+            if (ret < 0)
+            {
+                return ret;
+            }
         }
     }
 

@@ -4549,7 +4549,10 @@ static int mov_write_tfdt_tag(AVIOContext *pb, MOVTrack *track)
     ffio_wfourcc(pb, "tfdt");
     avio_w8(pb, 1); /* version */
     avio_wb24(pb, 0);
-    avio_wb64(pb, track->frag_start);
+    if (track->par->codec_id == AV_CODEC_ID_WEBVTT)
+        avio_wb64(pb, track->start_dts + track->frag_start + track->cluster[0].cts);
+    else
+        avio_wb64(pb, track->frag_start);
     return update_size(pb, pos);
 }
 
@@ -7055,6 +7058,7 @@ const AVCodecTag codec_mp4_tags[] = {
     { AV_CODEC_ID_DVD_SUBTITLE,    MKTAG('m', 'p', '4', 's') },
     { AV_CODEC_ID_MOV_TEXT,        MKTAG('t', 'x', '3', 'g') },
     { AV_CODEC_ID_TTML,            MKTAG('s', 't', 'p', 'p') },
+    { AV_CODEC_ID_WEBVTT,          MKTAG('w', 'v', 't', 't') },
     { AV_CODEC_ID_BIN_DATA,        MKTAG('g', 'p', 'm', 'd') },
     { AV_CODEC_ID_MPEGH_3D_AUDIO,  MKTAG('m', 'h', 'm', '1') },
     { AV_CODEC_ID_NONE,               0 },

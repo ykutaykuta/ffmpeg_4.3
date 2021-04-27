@@ -49,7 +49,7 @@
 #include "packet.h"
 #include "version.h"
 
-#include "ttml_common.h"
+#include "subtitle_common.h"
 
 /**
  * @defgroup libavc libavcodec

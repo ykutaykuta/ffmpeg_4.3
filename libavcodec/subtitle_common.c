@@ -1,4 +1,6 @@
-#include "ttml_common.h"
+#include "subtitle_common.h"
+
+#include "libavformat/avio_internal.h"
 
 void ttml_write_time(AVIOContext *pb, uint64_t time, AVRational *tb)
 {
@@ -65,4 +67,61 @@ int ttml_write_mdat_sub_pkt(AVPacket *pkt, const char *lang, AVRational *tb)
     av_freep(&buf);
 
     return ret;
+}
+
+int webvtt_write_mdat_sub_pkt(AVPacket *pkt, const char *lang, AVRational *tb)
+{
+    uint8_t *buf;
+    int ret = 0;
+    AVIOContext *pb = NULL;
+
+    ret = avio_open_dyn_buf(&pb);
+    if (ret < 0)
+    {
+        return ret;
+    }
+
+    webvtt_write_vttc_tag(pb, NULL, pkt->data, NULL);
+    webvtt_write_vtte_tag(pb);
+
+    avio_flush(pb);
+    ret = avio_close_dyn_buf(pb, &buf);
+    av_grow_packet(pkt, ret - pkt->size);
+    memcpy(pkt->data, buf, pkt->size);
+    av_freep(&buf);
+
+    return ret;
+}
+
+void webvtt_write_vttc_tag(AVIOContext *pb, const char *iden, const char *payl, const char *sttg)
+{
+    int64_t curpos;
+    int64_t pos = avio_tell(pb);
+    avio_wb32(pb, 0); /* write size */
+    ffio_wfourcc(pb, "vttc");
+
+    webvtt_write_vttc_subtag(pb, "iden", iden);
+    webvtt_write_vttc_subtag(pb, "payl", payl);
+    webvtt_write_vttc_subtag(pb, "sttg", sttg);
+    curpos = avio_tell(pb);
+    avio_seek(pb, pos, SEEK_SET);
+    avio_wb32(pb, curpos - pos); /* rewrite size */
+    avio_seek(pb, curpos, SEEK_SET);
+}
+
+void webvtt_write_vtte_tag(AVIOContext *pb)
+{
+    /* write webvtt cue */
+    avio_wb32(pb, 8);
+    ffio_wfourcc(pb, "vtte");
+}
+
+void webvtt_write_vttc_subtag(AVIOContext *pb, const char *tag, const char *data)
+{
+    if (!data)
+        return;
+    size_t size = strlen(data);
+    avio_wb32(pb, 8 + size);
+    ffio_wfourcc(pb, tag);
+    avio_write(pb, data, size);
 }

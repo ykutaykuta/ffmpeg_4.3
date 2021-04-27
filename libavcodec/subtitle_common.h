@@ -1,5 +1,5 @@
-#ifndef TTML_COMMON_H
-#define TTML_COMMON_H
+#ifndef SUBTITLE_COMMON_H
+#define SUBTITLE_COMMON_H
 
 #include "libavformat/avio.h"
 #include "packet.h"
@@ -68,4 +68,13 @@ void ttml_write_header_internal(AVIOContext *pb, const char *lang);
 
 void ttml_writer_footer_internal(AVIOContext *pb);
 
-#endif /* TTML_COMMON_H */
+int webvtt_write_mdat_sub_pkt(AVPacket *pkt, const char *lang, AVRational *tb);
+
+void webvtt_write_vttc_tag(AVIOContext *pb, const char *iden, const char *payl, const char *sttg);
+
+/* write vttc subtag: iden, payl, sttg */
+void webvtt_write_vttc_subtag(AVIOContext *pb, const char *tag, const char *data);
+
+void webvtt_write_vtte_tag(AVIOContext *pb);
+
+#endif /* SUBTITLE_COMMON_H */
