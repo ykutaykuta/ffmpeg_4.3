@@ -171,6 +171,7 @@ float max_error_rate  = 2.0/3;
 int filter_nbthreads = 0;
 int filter_complex_nbthreads = 0;
 int vstats_version = 2;
+int cus_flag = 0;
 
 
 static int intra_only         = 0;
@@ -3186,6 +3187,44 @@ static int opt_filter_complex_script(void *optctx, const char *opt, const char *
     return 0;
 }
 
+static int opt_cus_flag(void* optctx, const char* opt, const char* arg)
+{
+    const struct { const char* name; int flag; } ff_flags[] = {
+        { "sub_ocr" ,   AV_SUBTITLE_OCR },
+    };
+
+    OptionsContext* s = optctx;
+
+    int i, elems;
+    char* token;
+    int value = 0;
+    av_assert0(arg);
+    elems = FF_ARRAY_ELEMS(ff_flags);
+
+
+    token = strtok(arg, "+");
+    while (token)
+    {
+        for (i = 0; i < elems; i++)
+        {
+            if (!strcmp(token, ff_flags[i].name))
+            {
+                value += ff_flags[i].flag;
+                break;
+            }
+        }
+        if (i >= elems)
+        {
+            av_log(NULL, AV_LOG_ERROR, "Invalid value '%s' for option '%s' \n", token, opt);
+            return AVERROR(EINVAL);
+        }
+        token = strtok(NULL, "+");
+    }
+
+    cus_flag = value;
+    return 0;
+}
+
 void show_help_default(const char *opt, const char *arg)
 {
     /* per-file options have at least one of those set */
@@ -3566,6 +3605,8 @@ const OptionDef options[] = {
         "set the maximum number of queued packets from the demuxer" },
     { "find_stream_info", OPT_BOOL | OPT_PERFILE | OPT_INPUT | OPT_EXPERT, { &find_stream_info },
         "read and decode the streams to fill missing information with heuristics" },
+    { "cus_flag", HAS_ARG | OPT_EXPERT, { .func_arg = opt_cus_flag },
+        "custom flag", "cus_flag"},
 
     /* video options */
     { "vframes",      OPT_VIDEO | HAS_ARG  | OPT_PERFILE | OPT_OUTPUT,           { .func_arg = opt_video_frames },

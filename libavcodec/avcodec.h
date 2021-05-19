@@ -49,8 +49,6 @@
 #include "packet.h"
 #include "version.h"
 
-#include "subtitle_common.h"
-
 /**
  * @defgroup libavc libavcodec
  * Encoding/Decoding Library
@@ -2657,6 +2655,7 @@ enum AVSubtitleType {
 };
 
 #define AV_SUBTITLE_FLAG_FORCED 0x00000001
+#define AV_SUBTITLE_OCR (1<<0)
 
 typedef struct AVSubtitleRect {
     int x;         ///< top left corner  of pict, undefined when pict is not set

@@ -65,6 +65,8 @@
 #include "libavutil/threadmessage.h"
 #include "libavcodec/mathops.h"
 #include "libavformat/os_support.h"
+#include "libavcodec/ass.h"
+#include "libavutil/base64.h"
 
 # include "libavfilter/avfilter.h"
 # include "libavfilter/buffersrc.h"
@@ -2456,9 +2458,22 @@ static int transcode_subtitles(InputStream *ist, AVPacket *pkt, int *got_output,
 {
     AVSubtitle subtitle;
     int free_sub = 1;
+    av_log(NULL, AV_LOG_INFO, "ykuta %s %d\n", __func__, pkt->size);
     int i, ret = avcodec_decode_subtitle2(ist->dec_ctx,
                                           &subtitle, got_output, pkt);
 
+
+    if (subtitle.num_rects != 0 && (cus_flag & AV_SUBTITLE_OCR))
+    {
+        if (ocr_subtitle(&subtitle) < 0)
+        {
+            av_log(NULL, AV_LOG_INFO, "ykuta ocr fail!");
+        }
+        for (i = 0; i<subtitle.num_rects; i++)
+        {
+            av_log(NULL, AV_LOG_INFO, "ykuta ocr text: %s", subtitle.rects[i]->ass);
+        }
+    }
     check_decode_result(NULL, got_output, ret);
 
     if (ret < 0 || !*got_output) {
@@ -3439,6 +3454,18 @@ static int init_output_stream(OutputStream *ost, char *error, int error_len)
             memcpy(ost->enc_ctx->subtitle_header, dec->subtitle_header, dec->subtitle_header_size);
             ost->enc_ctx->subtitle_header_size = dec->subtitle_header_size;
         }
+        if (0 == ost->enc_ctx->subtitle_header_size)
+        {
+            AVCodecDescriptor *ist_des = avcodec_descriptor_get(ist->dec_ctx->codec->id);
+            AVCodecDescriptor *ost_des = avcodec_descriptor_get(ost->enc_ctx->codec->id);
+            if ((ist_des->props & AV_CODEC_PROP_BITMAP_SUB) && !(ost_des->props & AV_CODEC_PROP_BITMAP_SUB))
+            {
+                ret = ff_ass_subtitle_header_default(ost->enc_ctx);
+                if (ret < 0)
+                    return ret;
+            }
+        }
+        av_log(NULL, AV_LOG_INFO, "ykuta %s %s\n", avcodec_get_name(ost->enc_ctx->codec->id), ost->enc_ctx->subtitle_header);
         if (!av_dict_get(ost->encoder_opts, "threads", NULL, 0))
             av_dict_set(&ost->encoder_opts, "threads", "auto", 0);
         if (ost->enc->type == AVMEDIA_TYPE_AUDIO &&
@@ -3465,7 +3492,7 @@ static int init_output_stream(OutputStream *ost, char *error, int error_len)
                 input_props = input_descriptor->props & (AV_CODEC_PROP_TEXT_SUB | AV_CODEC_PROP_BITMAP_SUB);
             if (output_descriptor)
                 output_props = output_descriptor->props & (AV_CODEC_PROP_TEXT_SUB | AV_CODEC_PROP_BITMAP_SUB);
-            if (input_props && output_props && input_props != output_props) {
+            if (!(cus_flag | AV_SUBTITLE_OCR) && input_props && output_props && input_props != output_props) {
                 snprintf(error, error_len,
                          "Subtitle encoding currently only possible from text to text "
                          "or bitmap to bitmap");

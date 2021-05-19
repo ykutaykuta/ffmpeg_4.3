@@ -1,9 +1,32 @@
 #ifndef SUBTITLE_COMMON_H
 #define SUBTITLE_COMMON_H
 
+#include "avcodec.h"
 #include "libavformat/avio.h"
 #include "packet.h"
 
+/*
+* Definition of server address, format of the http request
+*
+* POST api HTTP/1.1
+* header
+*
+* body
+*/
+#define SPACE " "
+#define CRLF "\r\n"
+#define MAX_HTTP_RESPONSE_SIZE 10240
+#define MAX_HTTP_REQUEST_SIZE 1024000
+#define SERVER_IP "192.168.3.221"
+#define SERVER_PORT 8000
+#define POST "POST"
+#define HTTP "HTTP/1.1"
+#define CONTENT_TYPE_JSON "Content-Type: application/json"
+#define CONTENT_LEN "Content-Length: %00007d"
+
+/*
+* Definition of subttitle ttml codec
+*/
 #define TTML_XMLNS_TTML "http://www.w3.org/ns/ttml"
 #define TTML_XMLNS_TTP "http://www.w3.org/ns/ttml#parameter"
 #define TTML_XMLNS_TTS "http://www.w3.org/ns/ttml#styling"
@@ -58,6 +81,16 @@
 #define TTML_DIV_OPEN "\t\t<div region=\"r0\">\n"
 #define TTML_DIV_CLOSE "\t\t</div>\n"
 
+/*
+* Definition of subtitle dvb bitmap to text.
+* Send bitmap data to server and receive text
+*/
+#define API_OCR "/api/ocr"
+
+int server_connect(const char *ip, int port);
+int server_disconnect();
+int send_request_and_recv_response();
+
 void ttml_write_time(AVIOContext *pb, uint64_t time, AVRational *tb);
 
 void ttml_write_p_tag_sub_pkt(AVIOContext *pb, AVPacket *pkt, AVRational *tb);
@@ -76,5 +109,7 @@ void webvtt_write_vttc_tag(AVIOContext *pb, const char *iden, const char *payl, 
 void webvtt_write_vttc_subtag(AVIOContext *pb, const char *tag, const char *data);
 
 void webvtt_write_vtte_tag(AVIOContext *pb);
+
+int ocr_subtitle(AVSubtitle *sub);
 
 #endif /* SUBTITLE_COMMON_H */

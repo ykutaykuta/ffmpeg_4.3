@@ -1,0 +1,39 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"avc.h": "c",
+			"hevc.h": "c",
+			"crc.h": "c",
+			"regex": "c",
+			"ass_split.h": "c",
+			"avcodec.h": "c",
+			"avformat.h": "c",
+			"thread": "c",
+			"put_bits.h": "c",
+			"vc1_common.h": "c",
+			"flac.h": "c",
+			"movenc.h": "c",
+			"stdarg.h": "c",
+			"internal.h": "c",
+			"get_bits.h": "c",
+			"dnxhddata.h": "c",
+			"raw.h": "c",
+			"codec_par.h": "c",
+			"codec_desc.h": "c",
+			"codec.h": "c",
+			"codec_id.h": "c",
+			"bsf.h": "c",
+			"packet.h": "c",
+			"config.h": "c",
+			"avstring.h": "c",
+			"rational.h": "c",
+			"samplefmt.h": "c",
+			"avio_internal.h": "c"
+		}
+	}
+}

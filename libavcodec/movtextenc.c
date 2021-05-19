@@ -690,6 +690,7 @@ static int mov_text_encode_frame(AVCodecContext *avctx, unsigned char *buf,
     s->box_flags = 0;
     for (i = 0; i < sub->num_rects; i++) {
         const char *ass = sub->rects[i]->ass;
+        av_log(NULL, AV_LOG_INFO, "ykuta %s %s\n", __func__, ass);
 
         if (sub->rects[i]->type != SUBTITLE_ASS) {
             av_log(avctx, AV_LOG_ERROR, "Only SUBTITLE_ASS type supported.\n");

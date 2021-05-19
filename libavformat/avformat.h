@@ -310,6 +310,7 @@
 #include <time.h>
 #include <stdio.h>  /* FILE */
 #include "libavcodec/avcodec.h"
+#include "libavcodec/subtitle_common.h"
 #include "libavutil/dict.h"
 #include "libavutil/log.h"
 

@@ -1613,6 +1613,7 @@ static int dvbsub_decode(AVCodecContext *avctx,
                          void *data, int *got_sub_ptr,
                          AVPacket *avpkt)
 {
+    av_log(NULL, AV_LOG_INFO, "ykuta %s %d\n", __func__, avpkt->size);
     const uint8_t *buf = avpkt->data;
     int buf_size = avpkt->size;
     DVBSubContext *ctx = avctx->priv_data;

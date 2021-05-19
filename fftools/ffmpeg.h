@@ -159,6 +159,9 @@ typedef struct OptionsContext {
     int subtitle_disable;
     int data_disable;
 
+    /* flags */
+    int subtitle_flags;
+
     /* indexed by output file stream index */
     int   *streamid_map;
     int nb_streamid_map;
@@ -610,6 +613,7 @@ extern char *videotoolbox_pixfmt;
 extern int filter_nbthreads;
 extern int filter_complex_nbthreads;
 extern int vstats_version;
+extern int cus_flag;
 
 extern const AVIOInterruptCB int_cb;
 

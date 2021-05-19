@@ -29,6 +29,7 @@
 
 #include "avformat.h"
 #include "internal.h"
+#include "libavcodec/subtitle_common.h"
 
 // static void ttml_write_time(AVIOContext *pb, const char tag[],
 //                             int64_t millisec)
