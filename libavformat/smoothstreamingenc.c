@@ -196,10 +196,11 @@ static void output_chunk_list(OutputStream *os, AVIOContext *out, int final, int
         start = FFMAX(os->nb_fragments - skip - window_size, 0);
     for (i = start; i < os->nb_fragments - skip; i++) {
         Fragment *frag = os->fragments[i];
-        if (!final || removed)
-            avio_printf(out, "<c t=\"%"PRIu64"\" d=\"%"PRIu64"\" />\n", frag->start_time, frag->duration);
-        else
-            avio_printf(out, "<c n=\"%d\" d=\"%"PRIu64"\" />\n", frag->n, frag->duration);
+        avio_printf(out, "<c t=\"%"PRIu64"\" d=\"%"PRIu64"\" />\n", frag->start_time, frag->duration);
+        // if (!final || removed)
+        //     avio_printf(out, "<c t=\"%"PRIu64"\" d=\"%"PRIu64"\" />\n", frag->start_time, frag->duration);
+        // else
+        //     avio_printf(out, "<c n=\"%d\" d=\"%"PRIu64"\" />\n", frag->n, frag->duration);
     }
 }
 
