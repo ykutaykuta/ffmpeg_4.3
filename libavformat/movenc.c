@@ -4333,6 +4333,7 @@ static int mov_write_tfhd_tag(AVIOContext *pb, MOVMuxContext *mov,
                 (MOV_FRAG_SAMPLE_FLAG_DEPENDS_YES | MOV_FRAG_SAMPLE_FLAG_IS_NON_SYNC) :
                 MOV_FRAG_SAMPLE_FLAG_DEPENDS_NO;
         avio_wb32(pb, track->default_sample_flags);
+        // avio_wb32(pb, 0x4001);
     }
 
     return update_size(pb, pos);
@@ -4378,6 +4379,7 @@ static int mov_write_trun_tag(AVIOContext *pb, MOVMuxContext *mov,
                       track->cluster[first].pos); /* data offset */
     if (flags & MOV_TRUN_FIRST_SAMPLE_FLAGS)
         avio_wb32(pb, get_sample_flags(track, &track->cluster[first]));
+        // avio_wb32(pb, 0x4002);
 
     for (i = first; i < end; i++) {
         if (flags & MOV_TRUN_SAMPLE_DURATION)

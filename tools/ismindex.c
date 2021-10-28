@@ -192,6 +192,7 @@ static int write_fragments(struct Tracks *tracks, int start_index,
     for (i = start_index; i < tracks->nb_tracks; i++) {
         struct Track *track = tracks->tracks[i];
         const char *type    = track->is_video ? "video" : "audio";
+        const char *ext     = track->is_video ? "ismv"  : "isma";
         snprintf(dirname, sizeof(dirname), "%sQualityLevels(%d)", output_prefix, track->bitrate);
         if (split) {
             if (mkdir(dirname, 0777) == -1 && errno != EEXIST) {
@@ -201,8 +202,8 @@ static int write_fragments(struct Tracks *tracks, int start_index,
             }
         }
         for (j = 0; j < track->chunks; j++) {
-            snprintf(filename, sizeof(filename), "%s/Fragments(%s=%"PRId64")",
-                     dirname, type, track->offsets[j].time);
+            snprintf(filename, sizeof(filename), "%s/Fragments(%s=%"PRId64").%s",
+                     dirname, type, track->offsets[j].time, ext);
             avio_seek(in, track->offsets[j].offset, SEEK_SET);
             if (ismf)
                 fprintf(out, "%s %"PRId64, filename, avio_tell(in));
@@ -263,8 +264,8 @@ static int64_t read_trun_duration(AVIOContext *in, int default_duration,
         dts += sample_duration;
         pos = avio_tell(in);
     }
-
-    return max_pts - first_pts;
+    return dts;
+    // return max_pts - first_pts;
 }
 
 static int64_t read_moof_duration(AVIOContext *in, int64_t offset)
@@ -381,6 +382,12 @@ static int read_tfra(struct Tracks *tracks, int start_index, AVIOContext *f)
             // e.g., for 1/3 durations
             track->offsets[i].duration = duration;
         }
+    }
+    // asyn time and duration
+    track->offsets[0].time = 0;
+    for (i = 1; i < track->chunks; i++)
+    {
+        track->offsets[i].time = track->offsets[i-1].time + track->offsets[i-1].duration;
     }
     if (track->chunks > 0) {
         if (track->offsets[track->chunks - 1].duration <= 0) {
@@ -676,13 +683,14 @@ static void print_track_chunks(FILE *out, struct Tracks *tracks, int main,
                 }
             }
         }
-        fprintf(out, "\t\t<c n=\"%d\" d=\"%"PRId64"\" ",
-                i, track->offsets[i].duration);
-        if (pos != track->offsets[i].time) {
-            fprintf(out, "t=\"%"PRId64"\" ", track->offsets[i].time);
-            pos = track->offsets[i].time;
-        }
-        pos += track->offsets[i].duration;
+        // fprintf(out, "\t\t<c n=\"%d\" d=\"%"PRId64"\" ",
+        //         i, track->offsets[i].duration);
+        // if (pos != track->offsets[i].time) {
+        //     fprintf(out, "t=\"%"PRId64"\" ", track->offsets[i].time);
+        //     pos = track->offsets[i].time;
+        // }
+        // pos += track->offsets[i].duration;
+        fprintf(out, "\t\t<c t=\"%" PRId64 "\"", track->offsets[i].time);
         fprintf(out, "/>\n");
     }
 }
@@ -709,12 +717,25 @@ static void output_client_manifest(struct Tracks *tracks, const char *basename,
     if (tracks->video_track >= 0) {
         struct Track *track = tracks->tracks[tracks->video_track];
         struct Track *first_track = track;
+        int max_width = 0;
+        int max_height = 0;
+        for (int i = 0; i < tracks->nb_tracks; i++)
+        {   
+            track = tracks->tracks[i];
+            if (!track->is_video)
+                continue;
+            if (track->width > max_width)
+                max_width = track->width;
+            if (track->height > max_height)
+                max_height = track->height;
+        }
         int index = 0;
         fprintf(out,
                 "\t<StreamIndex Type=\"video\" QualityLevels=\"%d\" "
                 "Chunks=\"%d\" "
-                "Url=\"QualityLevels({bitrate})/Fragments(video={start time})\">\n",
-                tracks->nb_video_tracks, track->chunks);
+                "MaxWidth=\"%d\" MaxHeight=\"%d\" DisplayWidth=\"%d\" DisplayHeight=\"%d\" "
+                "Url=\"QualityLevels({bitrate})/Fragments(video={start time}).ismv\">\n",
+                tracks->nb_video_tracks, track->chunks, max_width, max_height, max_width, max_height);
         for (i = 0; i < tracks->nb_tracks; i++) {
             track = tracks->tracks[i];
             if (!track->is_video)
@@ -742,7 +763,7 @@ static void output_client_manifest(struct Tracks *tracks, const char *basename,
         fprintf(out,
                 "\t<StreamIndex Type=\"audio\" QualityLevels=\"%d\" "
                 "Chunks=\"%d\" "
-                "Url=\"QualityLevels({bitrate})/Fragments(audio={start time})\">\n",
+                "Url=\"QualityLevels({bitrate})/Fragments(audio={start time}).isma\">\n",
                 tracks->nb_audio_tracks, track->chunks);
         for (i = 0; i < tracks->nb_tracks; i++) {
             track = tracks->tracks[i];
