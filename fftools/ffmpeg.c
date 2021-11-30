@@ -4862,7 +4862,7 @@ int main(int argc, char **argv)
     }
 
     for (i = 0; i < nb_output_files; i++) {
-        if (strcmp(output_files[i]->ctx->oformat->name, "rtp"))
+        if (strcmp(output_files[i]->ctx->oformat->name, "rtp") || !strncmp(output_files[i]->ctx->url, "webrtc://", strlen("webrtc://")))
             want_sdp = 0;
     }
 

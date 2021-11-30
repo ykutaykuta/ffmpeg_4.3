@@ -322,6 +322,7 @@ External library support:
   --enable-vulkan          enable Vulkan code [no]
   --disable-xlib           disable xlib [autodetect]
   --disable-zlib           disable zlib [autodetect]
+  --enable-libdatachannel  enabled datachannel for webrtc transfer [no]
 
   The following libraries provide various hardware acceleration features:
   --disable-amf            disable AMF video encoding code [autodetect]
@@ -1822,6 +1823,7 @@ EXTERNAL_LIBRARY_LIST="
     opengl
     pocketsphinx
     vapoursynth
+    libdatachannel
 "
 
 HWACCEL_AUTODETECT_LIBRARY_LIST="
@@ -3267,6 +3269,7 @@ vapoursynth_demuxer_deps="vapoursynth"
 videotoolbox_suggest="coreservices"
 videotoolbox_deps="corefoundation coremedia corevideo"
 videotoolbox_encoder_deps="videotoolbox VTCompressionSessionPrepareToEncodeFrames"
+libdatachannel_demuxer_deps="libdatachannel"
 
 # demuxers / muxers
 ac3_demuxer_select="ac3_parser"
@@ -3454,6 +3457,7 @@ udp_protocol_select="network"
 udplite_protocol_select="network"
 unix_protocol_deps="sys_un_h"
 unix_protocol_select="network"
+webrtc_protocol_deps="libdatachannel"
 
 # external library protocols
 libamqp_protocol_deps="librabbitmq"
@@ -6355,6 +6359,7 @@ enabled libopus           && {
         require_pkg_config libopus opus opus_multistream.h opus_multistream_surround_encoder_create
     }
 }
+enabled libdatachannel    && require_pkg_config libdatachannel datachannel rtc/rtc.h rtcPreload
 enabled libpulse          && require_pkg_config libpulse libpulse pulse/pulseaudio.h pa_context_new
 enabled librabbitmq       && require_pkg_config librabbitmq "librabbitmq >= 0.7.1" amqp.h amqp_new_connection
 enabled librav1e          && require_pkg_config librav1e "rav1e >= 0.1.0" rav1e.h rav1e_context_new

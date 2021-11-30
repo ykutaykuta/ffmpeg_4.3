@@ -577,6 +577,7 @@ OBJS-$(CONFIG_XWMA_DEMUXER)              += xwma.o
 OBJS-$(CONFIG_YOP_DEMUXER)               += yop.o
 OBJS-$(CONFIG_YUV4MPEGPIPE_DEMUXER)      += yuv4mpegdec.o
 OBJS-$(CONFIG_YUV4MPEGPIPE_MUXER)        += yuv4mpegenc.o
+OBJS-$(CONFIG_WEBRTC_MUXER)              += webrtcenc.o 
 
 # external library muxers/demuxers
 OBJS-$(CONFIG_AVISYNTH_DEMUXER)          += avisynth.o
@@ -621,6 +622,7 @@ OBJS-$(CONFIG_SRTP_PROTOCOL)             += srtpproto.o srtp.o
 OBJS-$(CONFIG_SUBFILE_PROTOCOL)          += subfile.o
 OBJS-$(CONFIG_TEE_PROTOCOL)              += teeproto.o tee_common.o
 OBJS-$(CONFIG_TCP_PROTOCOL)              += tcp.o
+OBJS-$(CONFIG_WEBRTC_PROTOCOL)           += webrtcproto.o
 TLS-OBJS-$(CONFIG_GNUTLS)                += tls_gnutls.o
 TLS-OBJS-$(CONFIG_LIBTLS)                += tls_libtls.o
 TLS-OBJS-$(CONFIG_MBEDTLS)               += tls_mbedtls.o
