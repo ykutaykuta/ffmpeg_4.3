@@ -8,5 +8,4 @@
 
 #include "url.h"
 
-
 #endif /* AVFORMAT_WEBRTCPROTO_H */

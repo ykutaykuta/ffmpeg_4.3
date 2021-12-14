@@ -97,7 +97,7 @@ static int strNextOccurence(string str, char ch) {
 }
 
 static JSONObject *_parseJSON(string str, int *offset) {
-
+	JSONPair tempPtr;
 	int _offset = 0;
 
 	JSONObject *obj = (JSONObject*)malloc(sizeof(JSONObject));
@@ -117,7 +117,7 @@ static JSONObject *_parseJSON(string str, int *offset) {
 				return NULL;
 			}
 
-			JSONPair tempPtr = obj->pairs[obj->count - 1];
+			tempPtr = obj->pairs[obj->count - 1];
 
 			tempPtr.key = newWithSize(character, i + 1);
 			memcpy(tempPtr.key, str, i * sizeof(character));

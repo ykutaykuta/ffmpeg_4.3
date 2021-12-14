@@ -3,7 +3,6 @@
 #include "avc.h"
 #include "webrtcenc.h"
 
-
 static const AVClass webrtc_muxer_class = {
     .class_name = "Webrtc muxer",
     .item_name = av_default_item_name,
@@ -19,7 +18,8 @@ static void send_nal(AVFormatContext *s, const uint8_t *start, int size, unsigne
     avio_flush(s->pb);
 }
 
-static void send_raw(AVFormatContext *s, const uint8_t *start, int size, unsigned char info, uint32_t time_us) {
+static void send_raw(AVFormatContext *s, const uint8_t *start, int size, unsigned char info, uint32_t time_us)
+{
     avio_w8(s->pb, info);
     avio_wb32(s->pb, time_us);
     avio_write(s->pb, start, size);

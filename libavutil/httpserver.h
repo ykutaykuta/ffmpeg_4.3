@@ -224,7 +224,7 @@ extern "C"
 
   // Allocates an http response. This memory will be freed when http_respond is
   // called.
-  struct http_response_s *http_response_init();
+  struct http_response_s *http_response_init(void);
 
   // Set the response status. Accepts values between 100 and 599 inclusive. Any
   // other value will map to 500.
@@ -833,6 +833,7 @@ static int const hs_token_start_states[] = {
 
 static int hs_stream_read_socket(hs_stream_t *stream, int socket, int64_t *memused)
 {
+  int bytes;
   if (stream->index < stream->length)
     return 1;
   if (!stream->buf)
@@ -842,7 +843,6 @@ static int hs_stream_read_socket(hs_stream_t *stream, int socket, int64_t *memus
     assert(stream->buf != NULL);
     stream->capacity = HTTP_REQUEST_BUF_SIZE;
   }
-  int bytes;
   do
   {
     bytes = read(
@@ -883,11 +883,12 @@ static int hs_stream_next(hs_stream_t *stream, char *c)
 
 static void hs_stream_consume(hs_stream_t *stream)
 {
+  int new_len;
   if (HTTP_FLAG_CHECK(stream->flags, HS_SF_CONSUMED))
     return;
   HTTP_FLAG_SET(stream->flags, HS_SF_CONSUMED);
   stream->index++;
-  int new_len = stream->token.len + 1;
+  new_len = stream->token.len + 1;
   stream->token.len = stream->token.type == 0 ? 0 : new_len;
 }
 
@@ -899,20 +900,22 @@ static void hs_stream_begin_token(hs_stream_t *stream, int token_type)
 
 static int hs_stream_jump(hs_stream_t *stream, int offset)
 {
+  int new_len;
   HTTP_FLAG_SET(stream->flags, HS_SF_CONSUMED);
   if (stream->index + offset > stream->length)
     return 0;
   stream->index += offset;
-  int new_len = stream->token.len + offset;
+  new_len = stream->token.len + offset;
   stream->token.len = stream->token.type == 0 ? 0 : new_len;
   return 1;
 }
 
 static int hs_stream_jumpall(hs_stream_t *stream)
 {
+  int new_len;
   int offset = stream->length - stream->index;
   stream->index += offset;
-  int new_len = stream->token.len + offset;
+  new_len = stream->token.len + offset;
   HTTP_FLAG_SET(stream->flags, HS_SF_CONSUMED);
   stream->token.len = stream->token.type == 0 ? 0 : new_len;
   return offset;
