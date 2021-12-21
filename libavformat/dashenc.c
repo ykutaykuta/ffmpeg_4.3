@@ -55,6 +55,7 @@ typedef enum {
     SEGMENT_TYPE_AUTO = 0,
     SEGMENT_TYPE_MP4,
     SEGMENT_TYPE_WEBM,
+    SEGMENT_TYPE_TTML,
     SEGMENT_TYPE_NB
 } SegmentType;
 
@@ -118,6 +119,7 @@ typedef struct OutputStream {
     SegmentType segment_type;  /* segment type selected for this particular stream */
     const char *format_name;
     const char *extension_name;
+    const char *mime_type;
     const char *single_file_name;  /* file names selected for this particular stream */
     const char *init_seg_name;
     const char *media_seg_name;
@@ -217,6 +219,7 @@ static struct format_string {
     { SEGMENT_TYPE_AUTO, "auto" },
     { SEGMENT_TYPE_MP4, "mp4" },
     { SEGMENT_TYPE_WEBM, "webm" },
+    { SEGMENT_TYPE_TTML, "ttml" },
     { 0, NULL }
 };
 
@@ -272,6 +275,16 @@ static const char *get_extension_str(SegmentType type, int single_file)
 
     case SEGMENT_TYPE_MP4:  return single_file ? "mp4" : "m4s";
     case SEGMENT_TYPE_WEBM: return "webm";
+    case SEGMENT_TYPE_TTML: return "xml";
+    default: return NULL;
+    }
+}
+
+static const char *get_mime_type(SegmentType type) {
+    switch (type) {
+    case SEGMENT_TYPE_MP4:  return "mp4";
+    case SEGMENT_TYPE_WEBM: return "webm";
+    case SEGMENT_TYPE_TTML: return "ttml+xml";
     default: return NULL;
     }
 }
@@ -291,6 +304,8 @@ static inline SegmentType select_segment_type(SegmentType segment_type, enum AVC
         if (codec_id == AV_CODEC_ID_OPUS || codec_id == AV_CODEC_ID_VORBIS ||
             codec_id == AV_CODEC_ID_VP8 || codec_id == AV_CODEC_ID_VP9) {
             segment_type = SEGMENT_TYPE_WEBM;
+        } else if (codec_id == AV_CODEC_ID_TTML) {
+            segment_type = SEGMENT_TYPE_TTML;
         } else {
             segment_type = SEGMENT_TYPE_MP4;
         }
@@ -316,6 +331,11 @@ static int init_segment_types(AVFormatContext *s)
         os->extension_name = get_extension_str(segment_type, c->single_file);
         if (!os->extension_name) {
             av_log(s, AV_LOG_ERROR, "Could not get extension type for stream %d\n", i);
+            return AVERROR_MUXER_NOT_FOUND;
+        }
+        os->mime_type = get_mime_type(segment_type);
+        if (!os->mime_type) {
+            av_log(s, AV_LOG_ERROR, "Could not get mime type for stream %d\n", i);
             return AVERROR_MUXER_NOT_FOUND;
         }
 
@@ -811,7 +831,7 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
     // write AdaptationSet tag
     if (as->media_type == AVMEDIA_TYPE_VIDEO)
     {
-        avio_printf(out, "\t\t<AdaptationSet id=\"%d\" contentType=\"%s\" startWithSAP=\"1\" segmentAlignment=\"true\"                              bitstreamSwitching=\"true\"", as->id, "video");
+        avio_printf(out, "\t\t<AdaptationSet id=\"%d\" contentType=\"%s\" startWithSAP=\"1\" segmentAlignment=\"true\" bitstreamSwitching=\"true\"", as->id, "video");
         if (as->max_frame_rate.num && !as->ambiguous_frame_rate && av_cmp_q(as->min_frame_rate, as->max_frame_rate) < 0)
         {
             avio_printf(out, " maxFrameRate=\"%d/%d\"", as->max_frame_rate.num, as->max_frame_rate.den);
@@ -829,7 +849,7 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
     }
     else
     {
-        avio_printf(out, "\t\t<AdaptationSet id=\"%d\" contentType=\"%s\" startWithSAP=\"1\" segmentAlignment=\"true\" ", as->id, "text");
+        avio_printf(out, "\t\t<AdaptationSet id=\"%d\" contentType=\"%s\" startWithSAP=\"1\" segmentAlignment=\"true\"", as->id, "text");
     }
 
     // avio_printf(out, "\t\t<AdaptationSet id=\"%d\" contentType=\"%s\" startWithSAP=\"1\" segmentAlignment=\"true\" bitstreamSwitching=\"true\"",
@@ -870,7 +890,7 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
 
         if (as->media_type == AVMEDIA_TYPE_VIDEO) {
             avio_printf(out, "\t\t\t<Representation id=\"%d\" mimeType=\"video/%s\" codecs=\"%s\"%s width=\"%d\" height=\"%d\"",
-                i, os->format_name, os->codec_str, bandwidth_str, s->streams[i]->codecpar->width, s->streams[i]->codecpar->height);
+                i, os->mime_type, os->codec_str, bandwidth_str, s->streams[i]->codecpar->width, s->streams[i]->codecpar->height);
             if (st->codecpar->field_order == AV_FIELD_UNKNOWN)
                 avio_printf(out, " scanType=\"unknown\"");
             else if (st->codecpar->field_order != AV_FIELD_PROGRESSIVE)
@@ -888,13 +908,13 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
             avio_printf(out, ">\n");
         } else if (as->media_type == AVMEDIA_TYPE_AUDIO) {
             avio_printf(out, "\t\t\t<Representation id=\"%d\" mimeType=\"audio/%s\" codecs=\"%s\"%s audioSamplingRate=\"%d\">\n",
-                i, os->format_name, os->codec_str, bandwidth_str, s->streams[i]->codecpar->sample_rate);
+                i, os->mime_type, os->codec_str, bandwidth_str, s->streams[i]->codecpar->sample_rate);
             avio_printf(out, "\t\t\t\t<AudioChannelConfiguration schemeIdUri=\"urn:mpeg:dash:23003:3:audio_channel_configuration:2011\" value=\"%d\" />\n",
                 s->streams[i]->codecpar->channels);
         } else 
         {
             avio_printf(out, "\t\t\t<Representation id=\"%d\" mimeType=\"application/%s\" codecs=\"%s\"%s>\n",
-                i, os->format_name, os->codec_str, bandwidth_str);
+                i, os->mime_type, os->codec_str, bandwidth_str);
         }
         if (!final && c->write_prft && os->producer_reference_time_str[0]) {
             avio_printf(out, "\t\t\t\t<ProducerReferenceTime id=\"%d\" inband=\"true\" type=\"%s\" wallClockTime=\"%s\" presentationTime=\"%"PRId64"\">\n",
@@ -1516,7 +1536,11 @@ static int dash_init(AVFormatContext *s)
 
         // copy AdaptationSet language and role from stream metadata
         dict_copy_entry(&as->metadata, s->streams[i]->metadata, "language");
-        dict_copy_entry(&as->metadata, s->streams[i]->metadata, "role");
+        // dict_copy_entry(&as->metadata, s->streams[i]->metadata, "role");
+        if (os->segment_type == SEGMENT_TYPE_TTML)
+            av_dict_set(&as->metadata, "role", "subtitle", AV_DICT_DONT_OVERWRITE);
+        else
+            av_dict_set(&as->metadata, "role", "main", AV_DICT_DONT_OVERWRITE);
 
         if (c->init_seg_name) {
             os->init_seg_name = av_strireplace(c->init_seg_name, "$ext$", os->extension_name);
@@ -2087,27 +2111,27 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
     int64_t seg_end_duration, elapsed_duration;
     int ret;
 
-    if (st->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE)
-    {
-        AVDictionaryEntry *lang = av_dict_get(s->metadata, "language", NULL, 0);
-        const char *printed_lang = (lang && lang->value) ? lang->value : "";
-        if (st->codecpar->codec_id == AV_CODEC_ID_TTML)
-        {
-            ret = ttml_write_mdat_sub_pkt(pkt, printed_lang, &st->time_base);
-            if (ret < 0)
-            {
-                return ret;
-            }
-        }
-        else if (st->codecpar->codec_id == AV_CODEC_ID_WEBVTT)
-        {
-            ret = webvtt_write_mdat_sub_pkt(pkt, printed_lang, &st->time_base);
-            if (ret < 0)
-            {
-                return ret;
-            }
-        }
-    }
+    // if (st->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE)
+    // {
+    //     AVDictionaryEntry *lang = av_dict_get(s->metadata, "language", NULL, 0);
+    //     const char *printed_lang = (lang && lang->value) ? lang->value : "";
+    //     if (st->codecpar->codec_id == AV_CODEC_ID_TTML)
+    //     {
+    //         ret = ttml_write_mdat_sub_pkt(pkt, printed_lang, &st->time_base);
+    //         if (ret < 0)
+    //         {
+    //             return ret;
+    //         }
+    //     }
+    //     else if (st->codecpar->codec_id == AV_CODEC_ID_WEBVTT)
+    //     {
+    //         ret = webvtt_write_mdat_sub_pkt(pkt, printed_lang, &st->time_base);
+    //         if (ret < 0)
+    //         {
+    //             return ret;
+    //         }
+    //     }
+    // }
 
     ret = update_stream_extradata(s, os, pkt, &st->avg_frame_rate);
     if (ret < 0)

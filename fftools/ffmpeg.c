@@ -2458,7 +2458,6 @@ static int transcode_subtitles(InputStream *ist, AVPacket *pkt, int *got_output,
 {
     AVSubtitle subtitle;
     int free_sub = 1;
-    av_log(NULL, AV_LOG_INFO, "ykuta %s %d\n", __func__, pkt->size);
     int i, ret = avcodec_decode_subtitle2(ist->dec_ctx,
                                           &subtitle, got_output, pkt);
 

@@ -1,0 +1,18 @@
+{
+    "files.associations": {
+        "ass_split.h": "c",
+        "subtitle_common.h": "c",
+        "ass.h": "c",
+        "array": "c",
+        "chrono": "c",
+        "functional": "c",
+        "ratio": "c",
+        "tuple": "c",
+        "type_traits": "c",
+        "utility": "c",
+        "compare": "c",
+        "istream": "c",
+        "ostream": "c",
+        "ranges": "c"
+    }
+}

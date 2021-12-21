@@ -31,21 +31,6 @@
 #include "internal.h"
 #include "libavcodec/subtitle_common.h"
 
-// static void ttml_write_time(AVIOContext *pb, const char tag[],
-//                             int64_t millisec)
-// {
-//     int64_t sec, min, hour;
-//     sec = millisec / 1000;
-//     millisec -= 1000 * sec;
-//     min = sec / 60;
-//     sec -= 60 * min;
-//     hour = min / 60;
-//     min -= 60 * hour;
-
-//     avio_printf(pb, "%s=\"%02"PRId64":%02"PRId64":%02"PRId64".%03"PRId64"\"",
-//                 tag, hour, min, sec, millisec);
-// }
-
 static int ttml_write_header(AVFormatContext *ctx)
 {
     if (ctx->nb_streams != 1 ||
@@ -55,17 +40,17 @@ static int ttml_write_header(AVFormatContext *ctx)
         return AVERROR(EINVAL);
     }
 
-    {
-        AVStream *s = ctx->streams[0];
-        AVIOContext *pb = ctx->pb;
+    // {
+    //     AVStream *s = ctx->streams[0];
+    //     AVIOContext *pb = ctx->pb;
 
-        AVDictionaryEntry *lang = av_dict_get(s->metadata, "language", NULL, 0);
-        const char *printed_lang = (lang && lang->value) ? lang->value : "";
+    //     AVDictionaryEntry *lang = av_dict_get(s->metadata, "language", NULL, 0);
+    //     const char *printed_lang = (lang && lang->value) ? lang->value : "";
 
-        // avpriv_set_pts_info(s, 64, 1, 1000);
-        ttml_write_header_internal(pb, printed_lang);
-        avio_flush(pb);
-    }
+    //     // avpriv_set_pts_info(s, 64, 1, 1000);
+    //     ttml_write_header_internal(pb, printed_lang, SUBTITLE_TEXT);
+    //     avio_flush(pb);
+    // }
 
     return 0;
 }
@@ -74,15 +59,28 @@ static int ttml_write_packet(AVFormatContext *ctx, AVPacket *pkt)
 {
     AVStream *s = ctx->streams[0];
     AVIOContext *pb = ctx->pb;
-    ttml_write_p_tag_sub_pkt(pb, pkt, &s->time_base);
+    AVDictionaryEntry *lang = av_dict_get(s->metadata, "language", NULL, 0);
+    const char *printed_lang = (lang && lang->value) ? lang->value : NULL;
+    if (pkt->data[0] == SUBTITLE_TEXT)
+    {
+        ttml_text_write_tt_open(pb, printed_lang);
+        ttml_text_write_pkt(pb, pkt, &s->time_base);
+        ttml_write_tt_close(pb);
+    }
+    else if (pkt->data[0] == SUBTITLE_BITMAP)
+    {
+        ttml_image_write_tt_open(pb, printed_lang);
+        ttml_image_write_pkt(pb, pkt, &s->time_base);
+        ttml_write_tt_close(pb);
+    }
     return 0;
 }
 
 static int ttml_write_trailer(AVFormatContext *ctx)
 {
-    AVIOContext *pb = ctx->pb;
-    ttml_writer_footer_internal(pb);
-    avio_flush(pb);
+    // AVIOContext *pb = ctx->pb;
+    // ttml_writer_footer_internal(pb, SUBTITLE_TEXT);
+    // avio_flush(pb);
 
     return 0;
 }
@@ -90,8 +88,8 @@ static int ttml_write_trailer(AVFormatContext *ctx)
 AVOutputFormat ff_ttml_muxer = {
     .name = "ttml",
     .long_name = NULL_IF_CONFIG_SMALL("TTML subtitle"),
-    .extensions = "ttml",
-    .mime_type = "text/ttml",
+    .extensions = "xml",
+    .mime_type = "application/ttml+xml",
     .flags = AVFMT_GLOBALHEADER | AVFMT_VARIABLE_FPS | AVFMT_TS_NONSTRICT,
     .subtitle_codec = AV_CODEC_ID_TTML,
     .write_header = ttml_write_header,

@@ -174,36 +174,89 @@ void ttml_write_time(AVIOContext *pb, uint64_t time, AVRational *tb)
     avio_printf(pb, "%02" PRId64 ":%02" PRId64 ":%02" PRId64 ".%03" PRId64, hour, min, sec, ms);
 }
 
-void ttml_write_p_tag_sub_pkt(AVIOContext *pb, AVPacket *pkt, AVRational *tb)
+void ttml_image_write_tt_open(AVIOContext *pb, const char *lang)
 {
+    if (!lang)
+        lang = "eng";
+    avio_printf(pb, XML_PROLOG);
+    avio_printf(pb, TTML_TT_OPEN_IMAGE, lang);
+}
+
+static void ttml_image_write_head_internal(AVIOContext *pb, AVPacket *pkt)
+{
+    avio_printf(pb, "\t<head>\n");
+    avio_printf(pb, "\t\t<metadata>\n");
+    avio_printf(pb, "\t\t\t<smpte:image imagetype=\"PNG\" encoding=\"Base64\" xml:id=\"img_0\">");
+    avio_write(pb, pkt->data + 1, pkt->size - 1);
+    avio_printf(pb, "</smpte:image>\n");
+    avio_printf(pb, "\t\t</metadata>\n");
+    avio_printf(pb, TTML_LAYOUT_TAG);
+    avio_printf(pb, "\t</head>\n");
+}
+
+static void ttml_image_write_body_internal(AVIOContext *pb, AVPacket *pkt, AVRational *tb)
+{
+    avio_printf(pb, "\t<body>\n");
+    avio_printf(pb, "\t\t<div begin=\"");
+    ttml_write_time(pb, pkt->pts, tb);
+    avio_printf(pb, "\" end=\"");
+    ttml_write_time(pb, pkt->pts + pkt->duration, tb);
+    avio_printf(pb, "\" region=\"r0\" smpte:backgroundImage=\"#img_0\"/>\n");
+    avio_printf(pb, "\t</body>\n");
+}
+
+void ttml_image_write_pkt(AVIOContext *pb, AVPacket *pkt, AVRational *tb)
+{
+    ttml_image_write_head_internal(pb, pkt);
+    ttml_image_write_body_internal(pb, pkt, tb);
+}
+
+void ttml_text_write_tt_open(AVIOContext *pb, const char *lang)
+{
+    if (!lang)
+        lang = "eng";
+    avio_printf(pb, XML_PROLOG);
+    avio_printf(pb, TTML_TT_OPEN_TEXT, lang);
+}
+
+static void ttml_text_write_head_internal(AVIOContext *pb, AVPacket *pkt)
+{
+    avio_printf(pb, "\t<head>\n");
+    avio_printf(pb, TTML_METADATA_TAG);
+    avio_printf(pb, TTML_STYLING_TAG);
+    avio_printf(pb, TTML_LAYOUT_TAG);
+    avio_printf(pb, "\t</head>\n");
+}
+
+static void ttml_text_write_body_internal(AVIOContext *pb, AVPacket *pkt, AVRational *tb)
+{
+    avio_printf(pb, "\t<body>\n");
+    avio_printf(pb, "\t\t<div region=\"r0\">\n");
     avio_printf(pb, "\t\t\t<p begin=\"");
     ttml_write_time(pb, pkt->pts, tb);
     avio_printf(pb, "\" end=\"");
     ttml_write_time(pb, pkt->pts + pkt->duration, tb);
     avio_printf(pb, "\">\n");
     avio_printf(pb, "\t\t\t\t<span style=\"s1\">");
-    avio_write(pb, pkt->data, pkt->size);
+    avio_write(pb, pkt->data + 1, pkt->size - 1);
     avio_printf(pb, "</span>\n");
     avio_printf(pb, "\t\t\t</p>\n");
+    avio_printf(pb, "\t\t</div>\n");
+    avio_printf(pb, "\t</body>\n");
 }
 
-void ttml_write_header_internal(AVIOContext *pb, const char *lang)
+void ttml_text_write_pkt(AVIOContext *pb, AVPacket *pkt, AVRational *tb)
 {
-    avio_printf(pb, XML_PROLOG);
-    avio_printf(pb, TTML_TT_OPEN, lang);
-    avio_printf(pb, TTML_HEAD_TAG);
-    avio_printf(pb, TTML_BODY_OPEN);
-    avio_printf(pb, TTML_DIV_OPEN);
+    ttml_text_write_head_internal(pb, pkt);
+    ttml_text_write_body_internal(pb, pkt, tb);
 }
 
-void ttml_writer_footer_internal(AVIOContext *pb)
+void ttml_write_tt_close(AVIOContext *pb)
 {
-    avio_printf(pb, TTML_DIV_CLOSE);
-    avio_printf(pb, TTML_BODY_CLOSE);
     avio_printf(pb, TTML_TT_CLOSE);
 }
 
-int ttml_write_mdat_sub_pkt(AVPacket *pkt, const char *lang, AVRational *tb)
+int ttml_prepare_for_mdat(AVPacket *pkt, const char *lang, AVRational *tb)
 {
     uint8_t *buf;
     int ret = 0;
@@ -215,9 +268,18 @@ int ttml_write_mdat_sub_pkt(AVPacket *pkt, const char *lang, AVRational *tb)
         return ret;
     }
 
-    ttml_write_header_internal(pb, lang);
-    ttml_write_p_tag_sub_pkt(pb, pkt, tb);
-    ttml_writer_footer_internal(pb);
+    if (pkt->data[0] == SUBTITLE_TEXT)
+    {
+        ttml_text_write_tt_open(pb, lang);
+        ttml_text_write_pkt(pb, pkt, tb);
+        ttml_write_tt_close(pb);
+    }
+    else if (pkt->data[0] == SUBTITLE_BITMAP)
+    {
+        ttml_image_write_tt_open(pb, lang);
+        ttml_image_write_pkt(pb, pkt, tb);
+        ttml_write_tt_close(pb);
+    }
     avio_flush(pb);
 
     ret = avio_close_dyn_buf(pb, &buf);
@@ -317,7 +379,7 @@ int ocr_subtitle(AVSubtitle *sub)
         size = sub->rects[i]->w * sub->rects[i]->h;
         b64_size = AV_BASE64_SIZE(size);
         av_base64_encode(p, b64_size, sub->rects[i]->data[0], size);
-        p = p + b64_size -1;
+        p = p + b64_size - 1;
         sprintf(p, "\"},");
         p += 3;
     }

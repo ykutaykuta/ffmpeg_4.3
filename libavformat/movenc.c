@@ -1724,8 +1724,7 @@ static int mov_write_subtitle_tag(AVIOContext *pb, MOVTrack *track)
     else if (track->par->codec_id == AV_CODEC_ID_TTML)
     {
         /* Write namepsace */
-        char *namespace = av_asprintf("%s %s %s %s %s %s", TTML_XMLNS_TTML, TTML_XMLNS_TTP,
-                                      TTML_XMLNS_TTS, TTML_XMLNS_TTM, TTML_XMLNS_EBUTTS, TTML_XMLNS_EBUTTM);
+        char *namespace = av_asprintf("%s %s %s %s %s %s", TTML_XMLNS, TTML_XMLNS_TTP, TTML_XMLNS_TTS, TTML_XMLNS_TTM, TTML_XMLNS_EBUTTS, TTML_XMLNS_EBUTTM);
         if (!namespace)
             return AVERROR(ENOMEM);
         avio_write(pb, namespace, strlen(namespace));
