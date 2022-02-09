@@ -840,7 +840,7 @@ static int write_adaptation_set(AVFormatContext *s, AVIOContext *out, int as_ind
         {
             avio_printf(out, " frameRate=\"%d/%d\"", as->max_frame_rate.num, as->max_frame_rate.den);
         }
-        avio_printf(out, " maxWidth=\"%d\" maxHeight=\"%d\"", as->max_width, as->max_height);
+        avio_printf(out, " minWidth=\"%d\" minHeight=\"%d\" maxWidth=\"%d\" maxHeight=\"%d\"", as->max_width, as->max_height, as->max_width, as->max_height);
         avio_printf(out, " par=\"%d:%d\"", as->par.num, as->par.den);
     }
     else if (as->media_type == AVMEDIA_TYPE_AUDIO)
@@ -2110,28 +2110,6 @@ static int dash_write_packet(AVFormatContext *s, AVPacket *pkt)
     AdaptationSet *as = &c->as[os->as_idx - 1];
     int64_t seg_end_duration, elapsed_duration;
     int ret;
-
-    // if (st->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE)
-    // {
-    //     AVDictionaryEntry *lang = av_dict_get(s->metadata, "language", NULL, 0);
-    //     const char *printed_lang = (lang && lang->value) ? lang->value : "";
-    //     if (st->codecpar->codec_id == AV_CODEC_ID_TTML)
-    //     {
-    //         ret = ttml_write_mdat_sub_pkt(pkt, printed_lang, &st->time_base);
-    //         if (ret < 0)
-    //         {
-    //             return ret;
-    //         }
-    //     }
-    //     else if (st->codecpar->codec_id == AV_CODEC_ID_WEBVTT)
-    //     {
-    //         ret = webvtt_write_mdat_sub_pkt(pkt, printed_lang, &st->time_base);
-    //         if (ret < 0)
-    //         {
-    //             return ret;
-    //         }
-    //     }
-    // }
 
     ret = update_stream_extradata(s, os, pkt, &st->avg_frame_rate);
     if (ret < 0)

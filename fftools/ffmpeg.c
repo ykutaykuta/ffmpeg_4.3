@@ -3453,7 +3453,7 @@ static int init_output_stream(OutputStream *ost, char *error, int error_len)
             memcpy(ost->enc_ctx->subtitle_header, dec->subtitle_header, dec->subtitle_header_size);
             ost->enc_ctx->subtitle_header_size = dec->subtitle_header_size;
         }
-        if (0 == ost->enc_ctx->subtitle_header_size)
+        if (0 == ost->enc_ctx->subtitle_header_size && ist)
         {
             AVCodecDescriptor *ist_des = avcodec_descriptor_get(ist->dec_ctx->codec->id);
             AVCodecDescriptor *ost_des = avcodec_descriptor_get(ost->enc_ctx->codec->id);

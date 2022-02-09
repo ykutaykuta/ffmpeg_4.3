@@ -34,8 +34,10 @@
 #include "libavutil/bprint.h"
 #include "libavutil/libattopng.h"
 #include "libavutil/base64.h"
+#include "libavutil/intreadwrite.h"
 #include "ass_split.h"
 #include "ass.h"
+#include <time.h>
 
 
 typedef struct
@@ -82,13 +84,14 @@ static const ASSCodesCallbacks ttml_callbacks = {
 static int ttml_encode_frame(AVCodecContext *avctx, uint8_t *buf,
                              int bufsize, const AVSubtitle *sub)
 {
+    av_log(NULL, AV_LOG_INFO, "ykuta %s\n", __func__);
     TTMLContext *s = avctx->priv_data;
     ASSDialog *dialog;
     int i;
 
     // for bitmap subtitle
     int has_bitmap = 0;
-    uint16_t x_min = UINT16_MAX, y_min = UINT16_MAX, x_max = 0, y_max = 0;
+    int x_min = INT_MAX, y_min = INT_MAX, x_max = 0, y_max = 0;
 
     av_bprint_clear(&s->buffer);
 
@@ -96,6 +99,8 @@ static int ttml_encode_frame(AVCodecContext *avctx, uint8_t *buf,
     {
         if (sub->rects[i]->type == SUBTITLE_ASS)
         {
+            if (!s->ass_ctx)
+                return AVERROR(ENOEXEC);
             const char *ass = sub->rects[i]->ass;
 #if FF_API_ASS_TIMING
             if (!strncmp(ass, "Dialogue: ", 10))
@@ -127,22 +132,37 @@ static int ttml_encode_frame(AVCodecContext *avctx, uint8_t *buf,
             has_bitmap = 1;
             x_min = FFMIN(x_min, sub->rects[i]->x);
             y_min = FFMIN(y_min, sub->rects[i]->y);
-            x_max = FFMAX(x_max, sub->rects[i]->x + sub->rects[i]->w);
-            y_max = FFMAX(y_max, sub->rects[i]->y + sub->rects[i]->h);
+            x_max = FFMAX(x_max, sub->rects[i]->x + sub->rects[i]->w - 1);
+            y_max = FFMAX(y_max, sub->rects[i]->y + sub->rects[i]->h - 1);
+        }
+        else if (sub->rects[i]->type == SUBTITLE_TEXT)
+        {
+            ttml_text_cb(s, sub->rects[i]->text, strlen(sub->rects[i]->text));
         }
         else
         {
-            av_log(avctx, AV_LOG_ERROR, "Only SUBTITLE_ASS and SUBTITLE_BITMAP types are supported.\n");
+            av_log(avctx, AV_LOG_ERROR, "SUBTITLE_NONE was detected and this type was supported.\n");
             return AVERROR(ENOSYS);
         }
     }
 
-    bufsize -= 1;   // first byte for specify profile text(0) or image(other)
+    bufsize -= 1;   // first byte for specify profile text or image
     if (has_bitmap) // when subtitle bitmap
     {
+        bufsize -= 16;  // the next 16 bytes for position of image
+        /**
+         * If video dimesions was not specified, set default to FullHD 1920*1080
+         */ 
+        int video_width = sub->video_width;
+        if (video_width <= 0)
+            video_width = 1920;
+        int video_height = sub->video_height;
+        if (video_height <= 0)
+            video_height = 1080;
+        clock_t begin = clock();
         int count, b64_size;
         uint8_t *data;
-        libattopng_t *png = libattopng_new(x_max - x_min - 1, y_max - y_min - 1, PNG_GRAYSCALE);
+        libattopng_t *png = libattopng_new(x_max - x_min + 1, y_max - y_min + 1, PNG_GRAYSCALE);
 
         for (i = 0; i < sub->num_rects; i++)
         {
@@ -169,12 +189,19 @@ static int ttml_encode_frame(AVCodecContext *avctx, uint8_t *buf,
             libattopng_destroy(png);
             return -1;
         }
-        buf[0] = SUBTITLE_BITMAP;
-        av_base64_encode(buf + 1, b64_size, data, count);
+        
+        AV_WB8(buf, SUBTITLE_BITMAP);
+        AV_WB32(buf + 1, (int32_t)(100 * x_min / video_width));
+        AV_WB32(buf + 5, (int32_t)(100 * y_min / video_height));
+        AV_WB32(buf + 9, (int32_t)(100 * (x_max - x_min + 1) / video_width));
+        AV_WB32(buf + 13, (int32_t)(100 * (y_max - y_min + 1) / video_height));
+        av_base64_encode(buf + 17, b64_size, data, count);
         libattopng_destroy(png);
-        return b64_size + 1;
+        clock_t end = clock();
+        av_log(NULL,AV_LOG_INFO, "ykuta time convert bitmap to png: %lfms\n", (double)(end - begin) * 1000 / CLOCKS_PER_SEC);
+        return b64_size + 16; // ignore NULL terminator
     }
-    else // when subtitle ass
+    else // case SUBTITLE_ASS or SUBTITLE_TEXT
     {
         if (!av_bprint_is_complete(&s->buffer))
             return AVERROR(ENOMEM);
@@ -186,7 +213,7 @@ static int ttml_encode_frame(AVCodecContext *avctx, uint8_t *buf,
             av_log(avctx, AV_LOG_ERROR, "Buffer too small for ASS event.\n");
             return -1;
         }
-        buf[0] = SUBTITLE_TEXT;
+        AV_WB8(buf, SUBTITLE_TEXT);
         memcpy(buf + 1, s->buffer.str, s->buffer.len);
 
         return s->buffer.len + 1;
@@ -203,11 +230,13 @@ static av_cold int ttml_encode_close(AVCodecContext *avctx)
 
 static av_cold int ttml_encode_init(AVCodecContext *avctx)
 {
+    av_log(NULL, AV_LOG_INFO, "ykuta %s\n", __func__);
     TTMLContext *s = avctx->priv_data;
     s->avctx = avctx;
-    s->ass_ctx = ff_ass_split(avctx->subtitle_header);
+    if (avctx->subtitle_header)
+        s->ass_ctx = ff_ass_split(avctx->subtitle_header);
     av_bprint_init(&s->buffer, 0, AV_BPRINT_SIZE_UNLIMITED);
-    return s->ass_ctx ? 0 : AVERROR_INVALIDDATA;
+    return 0;
 }
 
 AVCodec ff_ttml_encoder = {

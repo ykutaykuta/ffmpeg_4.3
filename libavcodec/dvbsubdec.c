@@ -730,6 +730,11 @@ static int save_subtitle_set(AVCodecContext *avctx, AVSubtitle *sub, int *got_ou
     int offset_x=0, offset_y=0;
     int ret = 0;
 
+    /**
+     * Copy video dimensions from AVCodecContext to AVSubtitle
+     */
+    sub->video_width = avctx->width;
+    sub->video_height = avctx->height;
 
     if (display_def) {
         offset_x = display_def->x;

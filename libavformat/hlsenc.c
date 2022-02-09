@@ -2275,6 +2275,12 @@ static int hls_write_packet(AVFormatContext *s, AVPacket *pkt)
     VariantStream *vs = NULL;
     char *old_filename = NULL;
 
+    for (i = 0; i<pkt->side_data_elems; i++) {
+        if (pkt->side_data[i].type == AV_PKT_DATA_MPEGTS_STREAM_ID) {
+            av_log(NULL, AV_LOG_INFO, "ykuta codec_id: %d AV_PKT_DATA_MPEGTS_STREAM_ID %d\n", st->codecpar->codec_id, pkt->side_data[i].data[0]);
+        }
+    }
+
     for (i = 0; i < hls->nb_varstreams; i++) {
         vs = &hls->var_streams[i];
         for (j = 0; j < vs->nb_streams; j++) {

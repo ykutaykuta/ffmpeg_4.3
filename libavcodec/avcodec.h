@@ -2699,6 +2699,12 @@ typedef struct AVSubtitle {
     unsigned num_rects;
     AVSubtitleRect **rects;
     int64_t pts;    ///< Same as packet pts, in AV_TIME_BASE
+    
+    /**
+     * Use for present ttml image subtitle
+     */ 
+    int video_width;
+    int video_height;
 } AVSubtitle;
 
 #if FF_API_NEXT
